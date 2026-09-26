@@ -86,7 +86,7 @@
     }
     if (s.conflicts.length) {
       out.push('');
-      out.push(`Unmerged paths:\n  (use "git add <file>..." to mark resolution)`);
+      out.push(`Unmerged paths:\n  (use "git add${s.conflicts.some(c => /deleted/.test(c.status)) ? '/rm' : ''} <file>..." to mark resolution)`);
       for (const c of s.conflicts) out.push(`\t${pad(c.status + ':', 17)}${c.path}`);
     }
     if (s.staged.length) {
@@ -131,7 +131,7 @@
   function commitResultText(repo, hash, { label } = {}) {
     const c = repo.getCommit(hash);
     const parentTree = repo.treeOfCommit(c.parents[0] || null);
-    const changes = repo.diffTrees(parentTree, repo.treeOfCommit(hash));
+    const changes = c.parents.length > 1 ? [] : repo.diffTrees(parentTree, repo.treeOfCommit(hash));
     const branch = repo.currentBranch();
     let head = `[${label || (branch ? branch : 'detached HEAD')}${c.parents.length ? '' : ' (root-commit)'} ${abbrev(hash)}] ${repo.subject(hash)}`;
     const lines = [head];
@@ -457,8 +457,10 @@
     }
     const headTree = repo.treeOfCommit(repo.headHash());
     if (!flags.f && !flags.force && !flags.cached) {
-      const dirty = targets.filter(p => repo.index.has(p) && (repo.workHash(p) !== repo.index.get(p) || headTree.get(p) !== repo.index.get(p)) && repo.workdir.has(p));
+      const dirty = targets.filter(p => repo.index.has(p) && repo.workHash(p) !== repo.index.get(p) && repo.workdir.has(p));
       if (dirty.length) throw new GitError(`error: the following file${dirty.length > 1 ? 's have' : ' has'} local modifications:\n${dirty.map(p => '    ' + p).join('\n')}\n(use --cached to keep the file, or -f to force removal)`);
+      const stagedOnly = targets.filter(p => repo.index.has(p) && headTree.get(p) !== repo.index.get(p) && repo.workdir.has(p));
+      if (stagedOnly.length) throw new GitError(`error: the following file${stagedOnly.length > 1 ? 's have' : ' has'} changes staged in the index:\n${stagedOnly.map(p => '    ' + p).join('\n')}\n(use --cached to keep the file, or -f to force removal)`);
     }
     const out = [];
     for (const p of targets) {
@@ -522,7 +524,7 @@
       return commitResultText(repo, h);
     }
     const headTree = head ? repo.getCommit(head).tree : null;
-    if (tree === headTree && !flags['allow-empty']) {
+    if ((tree === headTree || (!head && (partialTree || repo.index).size === 0)) && !flags['allow-empty']) {
       throw new GitError(statusText(repo));
     }
     if (message === undefined) {
@@ -585,7 +587,7 @@
     const lineFn = h => {
       const c = repo.getCommit(h);
       if (fmt) return [fmt.replace(/%h/g, abbrev(h)).replace(/%H/g, h).replace(/%s/g, repo.subject(h)).replace(/%an/g, c.author.name).replace(/%ae/g, c.author.email).replace(/%ad/g, fmtDate(c.authorDate)).replace(/%ar/g, '').replace(/%d/g, repo.decoStr(h)).replace(/%p/g, c.parents.map(abbrev).join(' ')).replace(/%P/g, c.parents.join(' ')).replace(/%n/g, '\n').replace(/%b/g, c.message.split('\n').slice(1).join('\n').trim()).replace(/%B/g, c.message).replace(/%%/g, '%')];
-      if (oneline) return [`${abbrev(h)}${repo.decoStr(h)} ${repo.subject(h)}`];
+      if (oneline) return [`${flags.pretty === 'oneline' && !flags['abbrev-commit'] ? h : abbrev(h)}${repo.decoStr(h)} ${repo.subject(h)}`];
       const lines = commitHeaderText(repo, h).split('\n');
       const extra = [];
       if (flags.stat || flags.p || flags.patch || flags['name-only'] || flags['name-status']) {
@@ -643,10 +645,11 @@
     let a, b;
     const workFlat = () => { const m = new Map(); for (const p of repo.index.keys()) if (repo.workdir.has(p)) m.set(p, repo.writeBlob(repo.workdir.get(p))); for (const p of repo.conflicts.keys()) if (repo.workdir.has(p)) m.set(p, repo.writeBlob(repo.workdir.get(p))); return m; };
     if (flags.staged || flags.cached) { a = repo.treeOfCommit(revs[0] || repo.headHash()); b = new Map(repo.index); }
-    else if (revs.length === 0) { a = new Map(repo.index); b = workFlat(); }
+    else if (revs.length === 0) { a = new Map(repo.index); for (const [p, c] of repo.conflicts) if (c.ours) a.set(p, c.ours); b = workFlat(); }
     else if (revs.length === 1) { a = repo.treeOfCommit(revs[0]); b = workFlat(); }
     else { a = repo.treeOfCommit(revs[0]); b = repo.treeOfCommit(revs[1]); }
     const filt = pathFilters.length ? pathFilters : null;
+    repo.trace = [];
     const changes = repo.diffTrees(a, b).filter(ch => !filt || filt.some(p => ch.path === p || ch.path.startsWith(p + '/')));
     if (flags.stat) return repo.diffStatText(changes).replace(/\n$/, '');
     if (flags['name-only']) return changes.map(c => c.path).join('\n');
@@ -805,7 +808,7 @@
     if (flags.ours || flags.theirs) {
       const ps = positional.concat(paths).map(p => toRepoPath(ctx, p));
       for (const p of ps) { const c = repo.conflicts.get(p); if (!c) throw new GitError(`error: path '${p}' does not have ${flags.ours ? 'our' : 'their'} version`); const h = flags.ours ? c.ours : c.theirs; if (!h) throw new GitError(`error: path '${p}' does not have ${flags.ours ? 'our' : 'their'} version`); repo.workdir.set(p, repo.blobContent(h)); }
-      return '';
+      return `Updated ${ps.length} path${ps.length > 1 ? 's' : ''} from the index`;
     }
     if (flags.b || flags.B) {
       checkAllowSwitch(repo);
@@ -827,18 +830,20 @@
     }
     if (flags.orphan) throw new GitError('本沙盒暂不支持 --orphan。');
     // 路径恢复：git checkout -- <paths> / git checkout <rev> -- <paths>
-    const restorePaths = (srcFlat, ps, fromIndex) => {
+    const restorePaths = (srcFlat, ps, fromIndex, srcLabel) => {
       const candidates = unionKeys(srcFlat);
+      let n = 0;
       for (const s of ps) {
         const rp = toRepoPath(ctx, s);
         const m = matchPathspec(rp, candidates);
         if (!m.length) throw new GitError(`error: pathspec '${s}' did not match any file(s) known to git`);
-        for (const p of m) { repo.workdir.set(p, repo.blobContent(srcFlat.get(p))); if (!fromIndex) repo.index.set(p, srcFlat.get(p)); repo.conflicts.delete(p); }
+        for (const p of m) { const h = srcFlat.get(p); if (repo.workHash(p) !== h || (!fromIndex && repo.index.get(p) !== h)) n++; repo.workdir.set(p, repo.blobContent(h)); if (!fromIndex) repo.index.set(p, h); repo.conflicts.delete(p); }
       }
-      return `Updated ${ps.length} path${ps.length > 1 ? 's' : ''} from ${fromIndex ? 'the index' : abbrev(repo.headHash())}`;
+      if (!fromIndex) repo.trace.push({ kind: 'index', paths: ps });
+      return `Updated ${n} path${n === 1 ? '' : 's'} from ${fromIndex ? 'the index' : srcLabel}`;
     };
     if (paths.length) {
-      if (positional.length) { const h = repo.resolveRev(positional[0]); return restorePaths(repo.treeOfCommit(h), paths, false); }
+      if (positional.length) { const h = repo.resolveRev(positional[0]); return restorePaths(repo.treeOfCommit(h), paths, false, abbrev(repo.getCommit(h).tree)); }
       const idx = new Map(repo.index); for (const [p, c] of repo.conflicts) if (c.ours) idx.set(p, c.ours);
       return restorePaths(idx, paths, true);
     }
@@ -865,7 +870,7 @@
       if (positional.every(p => unionKeys(idx).some(x => x === toRepoPath(ctx, p) || x.startsWith(toRepoPath(ctx, p) + '/')))) return restorePaths(idx, positional, true);
       throw new GitError(`error: pathspec '${target}' did not match any file(s) known to git`);
     }
-    if (positional.length > 1) { const h = repo.resolveRev(target); return restorePaths(repo.treeOfCommit(h), positional.slice(1), false); }
+    if (positional.length > 1) { const h = repo.resolveRev(target); return restorePaths(repo.treeOfCommit(h), positional.slice(1), false, abbrev(repo.getCommit(h).tree)); }
     checkAllowSwitch(repo);
     const h = repo.resolveRev(target);
     if (repo.HEAD.detached === h) return `HEAD is now at ${abbrev(h)} ${repo.subject(h)}`;
@@ -914,31 +919,35 @@
     else if (staged) srcFlat = repo.treeOfCommit(repo.headHash());
     else { srcFlat = new Map(repo.index); for (const [p, c] of repo.conflicts) if (c.ours) srcFlat.set(p, c.ours); }
     const known = unionKeys(srcFlat, repo.index, repo.conflicts, ...(staged ? [] : []));
+    if (flags.ours || flags.theirs) { for (const [p, c] of repo.conflicts) { const h = flags.ours ? c.ours : c.theirs; if (h) srcFlat.set(p, h); else srcFlat.delete(p); } }
+    const touched = [];
     for (const s of ps) {
       const rp = toRepoPath(ctx, s);
       const m = matchPathspec(rp, known);
       if (!m.length) throw new GitError(`error: pathspec '${s}' did not match any file(s) known to git`);
       for (const p of m) {
         const h = srcFlat.get(p);
-        if (staged) { if (h === undefined) repo.index.delete(p); else repo.index.set(p, h); repo.conflicts.delete(p); }
-        if (worktree) { if (h === undefined) { if (!staged) throw new GitError(`error: pathspec '${s}' did not match any file(s) known to git`); } else { repo.workdir.set(p, repo.blobContent(h)); if (src) repo.index.set(p, h); } }
+        if (staged) { if (h === undefined) repo.index.delete(p); else repo.index.set(p, h); repo.conflicts.delete(p); touched.push(p); }
+        if (worktree) { if (h === undefined) { if (!staged) throw new GitError(`error: pathspec '${s}' did not match any file(s) known to git`); } else repo.workdir.set(p, repo.blobContent(h)); }
       }
     }
-    repo.trace.push({ kind: 'index', paths: ps });
+    if (touched.length) repo.trace.push({ kind: 'index', paths: touched });
     return '';
   };
 
   /* ---------- 合并 ---------- */
   function mergeMessageFor(repo, refName) {
     const cur = repo.currentBranch();
-    if (refName.includes('/') && repo.refs.has('refs/remotes/' + refName)) return `Merge remote-tracking branch '${refName}'${cur && cur !== 'master' ? ` into ${cur}` : ''}`;
-    if (repo.refs.has('refs/heads/' + refName)) return `Merge branch '${refName}'${cur && cur !== 'master' ? ` into ${cur}` : ''}`;
-    if (repo.refs.has('refs/tags/' + refName)) return `Merge tag '${refName}'${cur && cur !== 'master' ? ` into ${cur}` : ''}`;
-    return `Merge commit '${refName}'${cur && cur !== 'master' ? ` into ${cur}` : ''}`;
+    const into = cur && cur !== 'master' && cur !== 'main' ? ` into ${cur}` : '';
+    if (refName.includes('/') && repo.refs.has('refs/remotes/' + refName)) return `Merge remote-tracking branch '${refName}'${into}`;
+    if (repo.refs.has('refs/heads/' + refName)) return `Merge branch '${refName}'${into}`;
+    if (repo.refs.has('refs/tags/' + refName)) return `Merge tag '${refName}'${into}`;
+    return `Merge commit '${refName}'${into}`;
   }
-  function doMerge(ctx, theirs, refName, { noff = false, ffOnly = false, message = null, squash = false } = {}) {
+  function doMerge(ctx, theirs, refName, { noff = false, ffOnly = false, message = null, squash = false, favor = null } = {}) {
     const repo = ctx.repo;
     const head = repo.headHash();
+    if (head) repo.ORIG_HEAD = head;
     if (!head) { // 空分支：直接指向
       repo.switchToTree(repo.treeOfCommit(theirs));
       repo.moveHead(theirs, `merge ${refName}: Fast-forward`);
@@ -959,7 +968,7 @@
     repo.checkDirtyForMerge(theirsTree, 'merge');
     if (!repo.indexTreeEqualsHead()) throw new GitError(`error: Your local changes to the following files would be overwritten by merge:\n${[...repo.index.keys()].filter(p => repo.treeOfCommit(head).get(p) !== repo.index.get(p)).map(p => '\t' + p).join('\n')}\nPlease commit your changes or stash them before you merge.\nAborting`);
     const saved = repo.snapshotWorkState();
-    const mr = repo.mergeTrees(repo.treeOfCommit(base), repo.treeOfCommit(head), theirsTree, { ours: 'HEAD', theirs: refName });
+    const mr = repo.mergeTrees(repo.treeOfCommit(base), repo.treeOfCommit(head), theirsTree, { ours: 'HEAD', theirs: refName, favor });
     repo.applyMergeResult(mr);
     const msg = message || mergeMessageFor(repo, refName);
     if (mr.conflicts.length) {
@@ -975,7 +984,8 @@
   }
   commands.merge = (ctx, args) => {
     const repo = ctx.repo;
-    const { flags, positional } = parseArgs(args, { abort: 'bool', continue: 'bool', 'no-ff': 'bool', 'ff-only': 'bool', ff: 'bool', m: 'value', squash: 'bool', 'no-edit': 'bool', quit: 'bool', 'allow-unrelated-histories': 'bool', s: 'value', strategy: 'value', X: 'value' });
+    const { flags, positional } = parseArgs(args, { abort: 'bool', continue: 'bool', 'no-ff': 'bool', 'ff-only': 'bool', ff: 'bool', m: 'value', squash: 'bool', 'no-edit': 'bool', quit: 'bool', 'allow-unrelated-histories': 'bool', s: 'value', strategy: 'value', X: 'value', 'strategy-option': 'value' });
+    const favor = (flags.X || flags['strategy-option']) === 'ours' ? 'ours' : (flags.X || flags['strategy-option']) === 'theirs' ? 'theirs' : null;
     if (flags.abort) {
       if (!repo.state.merge) throw new GitError('fatal: There is no merge to abort (MERGE_HEAD missing).');
       repo.restoreWorkState(repo.state.merge.saved); repo.state.merge = null; return '';
@@ -985,7 +995,7 @@
     if (repo.state.rebase) throw new GitError('fatal: 正在 rebase 中，无法合并。');
     if (!positional.length) throw new GitError('fatal: No remote for the current branch.');
     const theirs = repo.resolveRev(positional[0]);
-    return doMerge(ctx, theirs, positional[0], { noff: flags['no-ff'], ffOnly: flags['ff-only'], message: flags.m, squash: flags.squash });
+    return doMerge(ctx, theirs, positional[0], { noff: flags['no-ff'], ffOnly: flags['ff-only'], message: flags.m, squash: flags.squash, favor });
   };
 
   /* ---------- rebase ---------- */
@@ -1039,6 +1049,7 @@
     }
     if (repo.isAncestor(upstream, head) && !flags.onto) return `Current branch ${branch} is up to date.`;
     const todo = repo.topoOrder(repo.revList([head], [upstream])).filter(h => repo.getCommit(h).parents.length < 2);
+    repo.ORIG_HEAD = head;
     repo.state.rebase = { branch, origHead: head, onto, todo, done: [], current: null, ontoName: positional[0] };
     repo.switchToTree(repo.treeOfCommit(onto));
     repo.HEAD = { detached: onto };
@@ -1104,7 +1115,9 @@
     let rev = null; let ps = paths.slice();
     if (positional.length) {
       const h = repo.tryResolve(positional[0]);
-      if (h && !(repo.index.has(positional[0]) || repo.workdir.has(positional[0]))) { rev = positional[0]; ps = positional.slice(1).concat(ps); }
+      const isPath = repo.index.has(toRepoPath(ctx, positional[0])) || repo.workdir.has(toRepoPath(ctx, positional[0])) || repo.conflicts.has(toRepoPath(ctx, positional[0])) || [...repo.index.keys()].some(k => k.startsWith(toRepoPath(ctx, positional[0]) + '/'));
+      if (h && !isPath) { rev = positional[0]; ps = positional.slice(1).concat(ps); }
+      else if (!h && !isPath && !/^\./.test(positional[0])) throw new GitError(`fatal: ambiguous argument '${positional[0]}': unknown revision or path not in the working tree.\nUse '--' to separate paths from revisions, like this:\n'git <command> [<revision>...] -- [<file>...]'`);
       else ps = positional.concat(ps);
     }
     const head = repo.headHash();
@@ -1121,7 +1134,7 @@
       }
       repo.trace.push({ kind: 'index', paths: changed });
       const lines = [];
-      for (const p of changed) { const w = repo.workHash(p); const i = repo.index.get(p); if (w === null && i !== undefined) lines.push(`D\t${p}`); else if (w !== null && i !== w) lines.push(`M\t${p}`); }
+      for (const p of changed) { if (!repo.index.has(p)) continue; const w = repo.workHash(p); const i = repo.index.get(p); if (w === null) lines.push(`D\t${p}`); else if (i !== w) lines.push(`M\t${p}`); }
       return lines.length ? 'Unstaged changes after reset:\n' + lines.join('\n') : '';
     }
     const target = rev ? repo.resolveRev(rev) : head;
@@ -1194,6 +1207,9 @@
       for (const p of repo.index.keys()) if (repo.workdir.has(p)) oursFlat.set(p, repo.writeBlob(repo.workdir.get(p)));
       // 未跟踪文件冲突检查
       if (st.untracked && st.untracked.length) { const clash = st.untracked.filter(p => repo.workdir.has(p)); if (clash.length) throw new GitError(`error: ${clash.join(', ')} already exists, no checkout\nerror: could not restore untracked files from stash`); }
+      const overlap = [];
+      for (const p of unionKeys(baseTree, stashTree)) { if (baseTree.get(p) === stashTree.get(p)) continue; if (repo.index.has(p) && repo.workHash(p) !== repo.index.get(p)) overlap.push(p); }
+      if (overlap.length) throw new GitError(`error: Your local changes to the following files would be overwritten by merge:\n${overlap.map(p => '\t' + p).join('\n')}\nPlease commit your changes or stash them before you merge.\nAborting`);
       const mr = repo.mergeTrees(baseTree, oursFlat, stashTree, { ours: 'Updated upstream', theirs: 'Stashed changes' });
       // 应用：工作区 = result；index 仅对新文件更新（真实 git 默认不恢复 index，除非 --index）
       const savedIndex = new Map(repo.index);
@@ -1221,7 +1237,7 @@
     const repo = ctx.repo;
     const { flags, positional } = parseArgs(args, { a: 'bool', annotate: 'bool', m: 'value', message: 'value', d: 'bool', delete: 'bool', l: 'bool', list: 'bool', f: 'bool', force: 'bool', n: 'bool' });
     if (flags.d || flags.delete) { const out = []; for (const t of positional) { if (!repo.refs.has('refs/tags/' + t)) throw new GitError(`error: tag '${t}' not found.`); const h = repo.refs.get('refs/tags/' + t); repo.updateRef('refs/tags/' + t, null); out.push(`Deleted tag '${t}' (was ${abbrev(h)})`); } return out.join('\n'); }
-    if (!positional.length || flags.l || flags.list) return repo.tags().join('\n');
+    if (!positional.length || flags.l || flags.list) return repo.tags().map(t => { if (!flags.n) return t; const o = repo.getObject(repo.refs.get('refs/tags/' + t)); return `${pad(t, 16)}${o.type === 'tag' ? o.message.split('\n')[0] : repo.subject(repo.peel(o.hash))}`; }).join('\n');
     const name = positional[0];
     if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(name)) throw new GitError(`fatal: '${name}' is not a valid tag name.`);
     if (repo.refs.has('refs/tags/' + name) && !flags.f && !flags.force) throw new GitError(`fatal: tag '${name}' already exists`);
@@ -1243,12 +1259,13 @@
   commands.reflog = (ctx, args) => {
     const repo = ctx.repo;
     let sub = 'show'; if (args[0] && !args[0].startsWith('-') && ['show', 'expire', 'delete', 'exists'].includes(args[0])) { sub = args[0]; args = args.slice(1); }
-    const { positional } = parseArgs(args, { all: 'bool', n: 'value' });
+    const { flags, positional } = parseArgs(args, { all: 'bool', n: 'value' });
     if (sub === 'expire' || sub === 'delete') { const ref = positional[0] === undefined ? 'HEAD' : positional[0]; repo.reflogs.set(ref, []); return ''; }
     const ref = positional[0] ? (repo.refs.has('refs/heads/' + positional[0]) ? 'refs/heads/' + positional[0] : positional[0]) : 'HEAD';
     const log = repo.reflogs.get(ref) || [];
     const short = ref.replace('refs/heads/', '');
-    return log.map((e, i) => `${abbrev(e.new)}${repo.decoStr(e.new)} ${short}@{${i}}: ${e.msg}`).join('\n');
+    const lim = flags.n !== undefined ? parseInt(flags.n, 10) : Infinity;
+    return log.map((e, i) => `${abbrev(e.new)}${repo.decoStr(e.new)} ${short}@{${i}}: ${e.msg}`).slice(0, lim).join('\n');
   };
 
   /* ---------- blame ---------- */
@@ -1296,7 +1313,9 @@
       commit = parent;
     }
     const width = String(curLines.length).length;
-    return curLines.map((l, i) => { const a = attr[i] || { hash: '00000000', name: '?', date: now() }; return `${a.root ? '^' + a.hash.slice(0, 7) : a.hash.slice(0, 8)} (${pad(a.name, 12)} ${fmtDateISO(a.date)} ${String(i + 1).padStart(width)}) ${l}`; }).join('\n');
+    let from = 0, to = curLines.length;
+    if (flags.L) { const mm = flags.L.match(/^(\d+)(?:,(\d+))?$/); if (mm) { from = parseInt(mm[1], 10) - 1; to = mm[2] ? parseInt(mm[2], 10) : from + 1; } }
+    return curLines.map((l, i) => { const a = attr[i] || { hash: '00000000', name: '?', date: now() }; return `${a.root ? '^' + a.hash.slice(0, 7) : a.hash.slice(0, 8)} (${pad(a.name, 12)} ${fmtDateISO(a.date)} ${String(i + 1).padStart(width)}) ${l}`; }).slice(from, to).join('\n');
   };
 
   /* ---------- bisect ---------- */
@@ -1316,7 +1335,7 @@
       return `${h} is the first bad commit\n${commitHeaderText(repo, h, { deco: false })}\n\n${repo.diffStatText(changes).replace(/\n$/, '')}`;
     }
     const mid = cands[Math.floor((cands.length - 1) / 2)];
-    const left = Math.floor((cands.length - 1) / 2);
+    const left = Math.floor(cands.length / 2);
     const steps = Math.ceil(Math.log2(left + 1));
     repo.switchToTree(repo.treeOfCommit(mid));
     repo.HEAD = { detached: mid };
@@ -1416,13 +1435,13 @@
     const { url, target } = remoteFor(ctx, remoteName);
     if (positional[1]) {
       if (!target.refs.has('refs/heads/' + positional[1])) throw new GitError(`fatal: couldn't find remote ref ${positional[1]}`);
-      upstreamRef = `refs/remotes/${remoteName}/${positional[1]}`; upstreamLabel = `branch '${positional[1]}' of ${url}`;
+      upstreamRef = `refs/remotes/${remoteName}/${positional[1]}`; upstreamLabel = `branch '${positional[1]}' of ${url.replace(/\.git$/, '')}`;
       if (!repo.refs.has(upstreamRef)) { transferObjects(target, repo, [target.refs.get('refs/heads/' + positional[1])]); repo.refs.set(upstreamRef, target.refs.get('refs/heads/' + positional[1])); }
     } else {
       if (!cur) throw new GitError('You are not currently on a branch.\nPlease specify which branch you want to merge with.\nSee git-pull(1) for details.\n\n    git pull <remote> <branch>\n');
       const up = repo.upstreamOf(cur);
       if (!up) throw new GitError(`There is no tracking information for the current branch.\nPlease specify which branch you want to merge with.\nSee git-pull(1) for details.\n\n    git pull <remote> <branch>\n\nIf you wish to set tracking information for this branch you can do so with:\n\n    git branch --set-upstream-to=${remoteName}/<branch> ${cur}\n`);
-      upstreamRef = up.ref; upstreamLabel = `branch '${up.branch}' of ${url}`;
+      upstreamRef = up.ref; upstreamLabel = `branch '${up.branch}' of ${url.replace(/\.git$/, '')}`;
       if (!repo.refs.has(upstreamRef)) throw new GitError(`Your configuration specifies to merge with the ref 'refs/heads/${up.branch}'\nfrom the remote, but no such ref was fetched.`);
     }
     const theirs = repo.refs.get(upstreamRef);
@@ -1438,12 +1457,10 @@
     }
     if (flags['ff-only'] || repo.getConfig('pull.ff') === 'only') throw new GitError(pre + 'fatal: Not possible to fast-forward, aborting.');
     if (wantRebase) {
-      const r = commands.rebase(ctx, [upstreamRef.replace('refs/remotes/', '')]);
-      return pre + r;
+      try { return pre + commands.rebase(ctx, [upstreamRef.replace('refs/remotes/', '')]); } catch (e) { if (e instanceof GitError) throw new GitError(pre + e.message); throw e; }
     }
     if (flags['no-rebase'] || flags.ff || flags['no-ff'] || repo.getConfig('pull.rebase') === 'false') {
-      const r = doMerge(ctx, theirs, upstreamLabel, { noff: flags['no-ff'], message: `Merge ${upstreamLabel}` });
-      return pre + r;
+      try { return pre + doMerge(ctx, theirs, upstreamLabel, { noff: flags['no-ff'], message: `Merge ${upstreamLabel}` }); } catch (e) { if (e instanceof GitError) throw new GitError(pre + e.message); throw e; }
     }
     throw new GitError(pre + `hint: You have divergent branches and need to specify how to reconcile them.\nhint: You can do so by running one of the following commands sometime before\nhint: your next pull:\nhint:\nhint:   git config pull.rebase false  # merge\nhint:   git config pull.rebase true   # rebase\nhint:   git config pull.ff only       # fast-forward only\nhint:\nhint: You can replace "git config" with "git config --global" to set a default\nhint: preference for all repositories. You can also pass --rebase, --no-rebase,\nhint: or --ff-only on the command line to override the configured default per\nhint: invocation.\nfatal: Need to specify how to reconcile divergent branches.`);
   };
@@ -1582,9 +1599,17 @@
     const s = repo.statusData();
     let targets = flags.X ? s.ignored : flags.x ? s.untracked.concat(s.ignored) : s.untracked;
     if (!flags.d) targets = targets.filter(p => !p.includes('/'));
+    else targets = targets.slice();
     if (positional.length) { const ps = positional.map(p => toRepoPath(ctx, p)); targets = targets.filter(t => ps.some(p => t === p || t.startsWith(p + '/'))); }
     const out = [];
-    for (const p of targets) { out.push(`${dry ? 'Would remove' : 'Removing'} ${p}`); if (!dry) repo.workdir.delete(p); }
+    const rawTargets = flags.X ? s.ignored : flags.x ? (repo._rawUntracked || []).concat(s.ignored) : (repo._rawUntracked || []);
+    const shown = new Set();
+    for (const p of rawTargets) {
+      const disp = targets.find(t => t === p || (t.endsWith('/') && p.startsWith(t)));
+      if (!disp) continue;
+      if (!shown.has(disp)) { shown.add(disp); out.push(`${dry ? 'Would remove' : 'Removing'} ${disp}`); }
+      if (!dry) repo.workdir.delete(p);
+    }
     return out.join('\n');
   };
   commands.version = () => 'git version 2.45.0 (gitgame sandbox)';

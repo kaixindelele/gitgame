@@ -18,6 +18,8 @@
       if (ch === '\\' && i + 1 < line.length) { cur += line[++i]; has = true; continue; }
       if (/\s/.test(ch)) { if (cur || has) { tokens.push(cur); cur = ''; has = false; } continue; }
       if (ch === '>' ) { if (cur || has) { tokens.push(cur); cur = ''; has = false; } if (line[i + 1] === '>') { tokens.push('>>'); i++; } else tokens.push('>'); continue; }
+      if (ch === '|' && line[i + 1] !== '|') throw new ShellError('本沙盒不支持管道 |（可以用 git log -n 3、grep 文件 等替代）');
+      if (ch === '$' && /[A-Za-z_]/.test(line[i + 1] || '')) { let j = i + 1, name = ''; while (j < line.length && /[A-Za-z0-9_]/.test(line[j])) name += line[j++]; const env = { HOME: '/home/' + (tokenize.actor || 'you'), USER: tokenize.actor || 'you', PWD: tokenize.cwd || '' }; cur += env[name] !== undefined ? env[name] : ''; has = true; i = j - 1; continue; }
       if (ch === '&' && line[i + 1] === '&') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push('&&'); i++; continue; }
       if (ch === ';') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push(';'); continue; }
       if (ch === '|' && line[i + 1] === '|') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push('||'); i++; continue; }
@@ -63,7 +65,7 @@
       const parts = abs.split('/').filter(Boolean);
       let node = this.root;
       for (let i = 0; i < parts.length; i++) {
-        if (node.type === 'repo') return { kind: 'repo', repo: node.repo, rel: parts.slice(i).join('/'), node };
+        if (node.type === 'repo') { const rel = parts.slice(i).join('/'); if (parts[i] === '.git' && !node.repo.bare) return { kind: 'gitdir', repo: node.repo, rel: parts.slice(i + 1).join('/'), node }; return { kind: 'repo', repo: node.repo, rel, node }; }
         if (node.type !== 'dir') return null;
         const next = node.children.get(parts[i]);
         if (!next) return null;
@@ -106,16 +108,45 @@
     }
     currentRepo() { const l = this.locate(this.cwd); return l && l.kind === 'repo' ? l : null; }
 
+    /* ---- .git 虚拟目录（只读，帮助理解结构） ---- */
+    gitDirEntry(repo, rel) {
+      const r = repo; const h = r.headHash();
+      const entries = (names, types) => ({ type: 'dir', list: names.map((n, i) => ({ name: n, type: types ? types[i] : 'file' })) });
+      if (rel === '') return entries(['HEAD', 'ORIG_HEAD', 'config', 'description', 'index', 'logs', 'objects', 'refs'], ['file', 'file', 'file', 'file', 'file', 'dir', 'dir', 'dir']);
+      if (rel === 'HEAD') return { type: 'file', content: (r.HEAD.symbolic ? 'ref: ' + r.HEAD.symbolic : r.HEAD.detached) + '\n' };
+      if (rel === 'ORIG_HEAD') return r.ORIG_HEAD ? { type: 'file', content: r.ORIG_HEAD + '\n' } : null;
+      if (rel === 'description') return { type: 'file', content: "Unnamed repository; edit this file 'description' to name the repository.\n" };
+      if (rel === 'config') { const lines = ['[core]', '\trepositoryformatversion = 0', '\tfilemode = true', '\tbare = false']; const groups = {}; for (const [k, v] of Object.entries(r.config)) { const m = k.match(/^([^.]+)\.(.+)\.([^.]+)$/) || k.match(/^([^.]+)\.([^.]+)$/); if (!m) continue; const g = m.length === 4 ? `${m[1]} "${m[2]}"` : m[1]; const key = m.length === 4 ? m[3] : m[2]; (groups[g] = groups[g] || []).push(`\t${key} = ${v}`); } for (const g of Object.keys(groups)) lines.push(`[${g}]`, ...groups[g]); return { type: 'file', content: lines.join('\n') + '\n' }; }
+      if (rel === 'index') return { type: 'file', content: `（二进制文件。暂存区当前登记了 ${r.index.size} 个路径，用 git ls-files -s 查看）\n` };
+      if (rel === 'refs') return entries(['heads', 'remotes', 'tags'], ['dir', 'dir', 'dir']);
+      if (rel === 'refs/heads') return entries(r.branches());
+      if (rel === 'refs/tags') return entries(r.tags());
+      if (rel === 'refs/remotes') { const names = [...new Set(r.remoteRefs().map(x => x.split('/')[0]))]; return entries(names, names.map(() => 'dir')); }
+      if (rel.startsWith('refs/remotes/') && rel.split('/').length === 3) { const rn = rel.split('/')[2]; return entries(r.remoteRefs().filter(x => x.startsWith(rn + '/')).map(x => x.slice(rn.length + 1))); }
+      if (rel.startsWith('refs/') && r.refs.has(rel)) return { type: 'file', content: r.refs.get(rel) + '\n' };
+      if (rel === 'logs') return entries(['HEAD', 'refs'], ['file', 'dir']);
+      if (rel === 'logs/HEAD' || (rel.startsWith('logs/refs/heads/') && r.reflogs.has(rel.slice(5)))) { const log = (r.reflogs.get(rel === 'logs/HEAD' ? 'HEAD' : rel.slice(5)) || []).slice().reverse(); return { type: 'file', content: log.map(e => `${e.old || '0'.repeat(40)} ${e.new} ${r.getConfig('user.name') || 'you'} <${r.getConfig('user.email') || ''}> ${Math.floor(e.date / 1000)} +0800\t${e.msg}`).join('\n') + '\n' }; }
+      if (rel === 'logs/refs') return entries(['heads'], ['dir']);
+      if (rel === 'logs/refs/heads') return entries(r.branches().filter(b => r.reflogs.has('refs/heads/' + b)));
+      if (rel === 'objects') { const dirs = [...new Set([...r.objects.keys()].map(k => k.slice(0, 2)))].sort(); return entries(dirs.concat(['info', 'pack']), dirs.map(() => 'dir').concat(['dir', 'dir'])); }
+      if (rel === 'objects/info' || rel === 'objects/pack') return entries([]);
+      if (/^objects\/[0-9a-f]{2}$/.test(rel)) { const pre = rel.slice(8); return entries([...r.objects.keys()].filter(k => k.startsWith(pre)).map(k => k.slice(2)).sort()); }
+      if (/^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/.test(rel)) { const h = rel.slice(8, 10) + rel.slice(11); const o = r.objects.get(h); if (!o) return null; return { type: 'file', content: `（zlib 压缩的 ${o.type} 对象，${byteLen(o.content)} 字节。用 git cat-file -p ${h.slice(0, 7)} 查看内容）\n` }; }
+      return null;
+    }
+
     /* ---- 文件读写（对仓库和普通目录统一） ---- */
     readFile(abs) {
       const l = this.locate(abs);
       if (!l) return null;
+      if (l.kind === 'gitdir') { const e = this.gitDirEntry(l.repo, l.rel); return e && e.type === 'file' ? e.content : null; }
       if (l.kind === 'file') return l.node.content;
       if (l.kind === 'repo' && l.rel && l.repo.workdir.has(l.rel)) return l.repo.workdir.get(l.rel);
       return null;
     }
     writeFile(abs, content) {
       const l = this.locate(abs);
+      if (l && l.kind === 'gitdir') throw new ShellError('本沙盒里 .git 目录是只读的，请用 git 命令修改它');
       if (l && l.kind === 'repo') { if (!l.rel) throw new ShellError(`${abs}: Is a directory`); if (l.repo.bare) throw new ShellError('裸仓库没有工作区，不能直接写文件'); if ([...l.repo.workdir.keys()].some(k => k.startsWith(l.rel + '/'))) throw new ShellError(`${abs}: Is a directory`); l.repo.workdir.set(l.rel, content); return; }
       if (l && l.kind === 'dir') throw new ShellError(`${abs}: Is a directory`);
       const { parentPath, name } = this.parentOf(abs);
@@ -125,18 +156,20 @@
       if (pl.kind !== 'dir') throw new ShellError(`${parentPath}: Not a directory`);
       pl.node.children.set(name, { type: 'file', content });
     }
-    isDir(abs) { const l = this.locate(abs); if (!l) return false; if (l.kind === 'dir') return true; if (l.kind === 'repo') return l.rel === '' || [...l.repo.workdir.keys()].some(k => k.startsWith(l.rel + '/')); return false; }
-    exists(abs) { const l = this.locate(abs); if (!l) return false; if (l.kind === 'repo') return l.rel === '' || l.repo.workdir.has(l.rel) || this.isDir(abs); return true; }
+    isDir(abs) { const l = this.locate(abs); if (!l) return false; if (l.kind === 'gitdir') { const e = this.gitDirEntry(l.repo, l.rel); return !!e && e.type === 'dir'; } if (l.kind === 'dir') return true; if (l.kind === 'repo') return l.rel === '' || [...l.repo.workdir.keys()].some(k => k.startsWith(l.rel + '/')); return false; }
+    exists(abs) { const l = this.locate(abs); if (!l) return false; if (l.kind === 'gitdir') return !!this.gitDirEntry(l.repo, l.rel); if (l.kind === 'repo') return l.rel === '' || l.repo.workdir.has(l.rel) || this.isDir(abs); return true; }
     listDir(abs, { all = false } = {}) {
       const l = this.locate(abs);
       if (!l) throw new ShellError(`ls: cannot access '${abs}': No such file or directory`);
+      if (l.kind === 'gitdir') { const e = this.gitDirEntry(l.repo, l.rel); if (!e) throw new ShellError(`ls: cannot access '${abs}': No such file or directory`); if (e.type === 'file') return [{ name: l.rel.split('/').pop(), type: 'file' }]; return e.list; }
       if (l.kind === 'file') return [{ name: l.name, type: 'file' }];
       if (l.kind === 'dir') return [...l.node.children].map(([n, c]) => ({ name: n, type: c.type === 'file' ? 'file' : 'dir', repo: c.type === 'repo' })).sort((a, b) => a.name.localeCompare(b.name));
       const prefix = l.rel ? l.rel + '/' : '';
       const seen = new Map();
       if (l.repo.bare) return [{ name: 'HEAD', type: 'file' }, { name: 'config', type: 'file' }, { name: 'objects', type: 'dir' }, { name: 'refs', type: 'dir' }];
       for (const k of l.repo.workdir.keys()) { if (!k.startsWith(prefix)) continue; const rest = k.slice(prefix.length); const first = rest.split('/')[0]; seen.set(first, rest.includes('/') ? 'dir' : 'file'); }
-      const out = [...seen].map(([name, type]) => ({ name, type })).sort((a, b) => a.name.localeCompare(b.name));
+      let out = [...seen].map(([name, type]) => ({ name, type })).sort((a, b) => a.name.localeCompare(b.name));
+      if (!all) out = out.filter(e => !e.name.startsWith('.'));
       if (all && !l.rel) out.unshift({ name: '.git', type: 'dir', git: true });
       if (!seen.size && !l.rel && !all && this.isDir(abs)) return out;
       if (l.rel && !seen.size) { if (l.repo.workdir.has(l.rel)) return [{ name: l.rel.split('/').pop(), type: 'file' }]; throw new ShellError(`ls: cannot access '${abs}': No such file or directory`); }
@@ -145,6 +178,7 @@
     removePath(abs, { recursive = false } = {}) {
       const l = this.locate(abs);
       if (!l) throw new ShellError(`rm: cannot remove '${abs}': No such file or directory`);
+      if (l.kind === 'gitdir') throw new ShellError('本沙盒里 .git 内部是只读的（rm -rf .git 可以删除整个仓库历史）');
       if (l.kind === 'repo') {
         if (!l.rel) { if (!recursive) throw new ShellError(`rm: cannot remove '${abs}': Is a directory`); const { parentPath, name } = this.parentOf(abs); this.locate(parentPath).node.children.delete(name); return; }
         if (l.repo.workdir.has(l.rel)) { l.repo.workdir.delete(l.rel); return; }
@@ -162,6 +196,7 @@
       const l = this.locate(abs);
       const out = new Map();
       if (!l) return null;
+      if (l.kind === 'gitdir') { const e = this.gitDirEntry(l.repo, l.rel); if (e && e.type === 'file') out.set('', e.content); return out; }
       if (l.kind === 'file') { out.set('', l.node.content); return out; }
       if (l.kind === 'repo') { const prefix = l.rel ? l.rel + '/' : ''; if (l.rel && l.repo.workdir.has(l.rel)) { out.set('', l.repo.workdir.get(l.rel)); return out; } for (const [k, v] of l.repo.workdir) if (k.startsWith(prefix)) out.set(k.slice(prefix.length), v); return out; }
       const walk = (node, p) => { for (const [n, c] of node.children) { if (c.type === 'file') out.set(p + n, c.content); else if (c.type === 'dir') walk(c, p + n + '/'); else for (const [k, v] of c.repo.workdir) out.set(p + n + '/' + k, v); } };
@@ -225,7 +260,8 @@
       // 返回 { out, err, actions }
       const results = [];
       let tokens;
-      try { tokens = tokenize(line); } catch (e) { return { out: '', err: e.message, ok: false }; }
+      tokenize.actor = this.actorName; tokenize.cwd = this.cwd;
+      try { tokens = tokenize(line.replace(/\s2>\s*\/dev\/null/g, '').replace(/\s2>&1/g, '')); } catch (e) { return { out: '', err: e.message, ok: false }; }
       const segments = []; let cur = []; let ops = [];
       for (const t of tokens) { if (t === '&&' || t === ';' || t === '||') { segments.push(cur); ops.push(t); cur = []; } else cur.push(t); }
       segments.push(cur);
@@ -482,7 +518,7 @@
     const { flags, positional } = parseArgs(args, { bare: 'bool', b: 'value', 'initial-branch': 'value', q: 'bool' });
     const target = w.resolve(positional[0] || '.');
     const l = w.locate(target);
-    if (l && l.kind === 'repo') { if (l.rel) throw new GitError('fatal: 已经在一个 git 仓库内部（不支持嵌套仓库）'); return `Reinitialized existing Git repository in ${target}/.git/`; }
+    if (l && l.kind === 'repo') { if (l.rel) throw new GitError(`fatal: 本沙盒不支持嵌套仓库：${l.repo.path} 已经是一个 git 仓库。\nhint: 如果那是误操作，先 rm -rf ${l.repo.path}/.git 撤销，再到正确的目录执行 git init。`); return `Reinitialized existing Git repository in ${target}/.git/`; }
     if (l && l.kind === 'file') throw new GitError(`fatal: cannot mkdir ${positional[0]}: File exists`);
     const defaultBranch = flags.b || flags['initial-branch'] || w.globalConfigFor(target)['init.defaultBranch'] || 'main';
     let files = new Map();

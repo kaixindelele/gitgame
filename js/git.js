@@ -148,6 +148,11 @@
       };
       return write(root);
     }
+    subtreeHash(treeHash, path) {
+      let cur = treeHash;
+      for (const seg of path.split('/').filter(Boolean)) { const t = this.getObject(cur); const e = (t.entries || []).find(x => x.name === seg && x.type === 'tree'); if (!e) return null; cur = e.hash; }
+      return cur;
+    }
     flattenTree(hash, prefix = '') {
       const out = new Map();
       if (!hash) return out;
@@ -243,6 +248,12 @@
     /* ---------- 版本解析 ---------- */
     resolveRev(rev, { wantCommit = true } = {}) {
       const orig = rev;
+      if (!wantCommit) {
+        const mPath = rev.match(/^([^:]+):(.+)$/);
+        if (mPath && !/^[0-9a-f]{40}$/.test(rev)) { const c = this.resolveRev(mPath[1]); const t = this.treeOfCommit(c); const path = mPath[2].replace(/^\.\//, ''); if (t.has(path)) return t.get(path); const sub = this.subtreeHash(this.getCommit(c).tree, path); if (sub) return sub; throw new GitError(`fatal: path '${mPath[2]}' does not exist in '${mPath[1]}'`); }
+        const mPeel = rev.match(/^(.+)\^\{(tree|commit)\}$/);
+        if (mPeel) { const c = this.resolveRev(mPeel[1]); return mPeel[2] === 'tree' ? this.getCommit(c).tree : c; }
+      }
       const bad = () => new GitError(`fatal: ambiguous argument '${orig}': unknown revision or path not in the working tree.\nUse '--' to separate paths from revisions, like this:\n'git <command> [<revision>...] -- [<file>...]'`);
       const m = rev.match(/^(.*?)((?:[~^]\d*|@\{-?\d+\})*)$/);
       let base = m[1], mods = m[2];
@@ -325,8 +336,8 @@
       const ex = new Set();
       for (const e of exclude) for (const h of this.ancestors(e)) ex.add(h);
       const seen = new Set(); const out = [];
-      const queue = tips.filter(t => t && !ex.has(t) && !seen.has(t));
-      for (const t of queue) seen.add(t);
+      const queue = [];
+      for (const t of tips) { if (t && !ex.has(t) && !seen.has(t)) { seen.add(t); queue.push(t); } }
       while (queue.length) {
         queue.sort((x, y) => this.getCommit(y).date - this.getCommit(x).date || (x < y ? -1 : 1));
         const h = queue.shift();
@@ -385,7 +396,17 @@
         else if (w !== this.index.get(p)) unstaged.push({ path: p, status: 'modified' });
       }
       const ignored = [];
-      for (const p of [...this.workdir.keys()].sort()) if (!this.index.has(p) && !this.conflicts.has(p)) { if (this.isIgnored(p)) ignored.push(p); else untracked.push(p); }
+      const rawUntracked = [];
+      for (const p of [...this.workdir.keys()].sort()) if (!this.index.has(p) && !this.conflicts.has(p)) { if (this.isIgnored(p)) ignored.push(p); else rawUntracked.push(p); }
+      // 和真实 git 一样：整个目录都未跟踪时折叠显示为 dir/
+      const trackedDirs = new Set(); for (const p of [...this.index.keys(), ...this.conflicts.keys()]) { const parts = p.split('/'); for (let i = 1; i < parts.length; i++) trackedDirs.add(parts.slice(0, i).join('/')); }
+      const seenDir = new Set();
+      for (const p of rawUntracked) {
+        const parts = p.split('/'); let shown = p;
+        for (let i = 1; i < parts.length; i++) { const d = parts.slice(0, i).join('/'); if (!trackedDirs.has(d)) { shown = d + '/'; break; } }
+        if (shown.endsWith('/')) { if (!seenDir.has(shown)) { seenDir.add(shown); untracked.push(shown); } } else untracked.push(shown);
+      }
+      this._rawUntracked = rawUntracked;
       const conflicts = [...this.conflicts].map(([p, c]) => ({ path: p, status: !c.ours ? 'deleted by us' : !c.theirs ? 'deleted by them' : !c.base ? 'both added' : 'both modified' }));
       return { staged, unstaged, untracked, ignored, conflicts, head, branch: this.currentBranch() };
     }

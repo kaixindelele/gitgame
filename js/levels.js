@@ -41,6 +41,9 @@
   const has = (s, sub) => s !== null && s !== undefined && s.includes(sub);
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const noMarkers = s => s !== null && !/^(<<<<<<<|=======|>>>>>>>)/m.test(s);
+  // 玩家是否用 git <cmd> <rev> 看过/操作过某个提交（rev 可以是 HEAD~2、哈希等任意写法）
+  const ranOn = (ctx, cmd, hash) => ctx.world.log.some(l => { if (!l.ok) return false; const m = l.line.match(new RegExp('^git ' + cmd + '\\s+(?:-\\S+\\s+)*([^\\s:]+)')); if (!m) return false; const r = repo(ctx); try { return r.resolveRev(m[1]) === hash; } catch (e) { return false; } });
+  const findCommit = (ctx, subject) => { const r = repo(ctx); return r.allCommits().find(c => c.message.split('\n')[0] === subject); };
 
   const LEVELS = [];
   const CHAPTERS = [
@@ -70,7 +73,7 @@
       { text: '用 du -sh * 看看磁盘占用', check: ctx => ranAny(ctx, /^du\b/) },
     ],
     hints: ['cp -r project project_v1', 'echo "// 新功能" >> project/app.js', 'cp -r project project_v2', 'diff -r project_v1 project_v2', 'du -sh *'],
-    done: `<p>痛点已经出现了：</p><ul><li>每份备份都是<b>完整复制</b>，README.md 一个字没改也被复制了 N 次。</li><li>备份之间<b>没有说明</b>：v2 比 v1 改了什么？为什么改？只能靠 diff 硬看。</li><li>你不知道 v1 和 v2 之间是否还有别的版本，也不知道谁改的。</li></ul><p>git 解决的就是这三件事：<b>只存变化、记录说明、记住顺序</b>。</p>`,
+    done: `<p>痛点已经出现了：</p><ul><li>每份备份都是<b>完整复制</b>，README.md 一个字没改也被复制了 N 次。</li><li>备份之间<b>没有说明</b>：v2 比 v1 改了什么？为什么改？只能靠 diff 硬看。</li><li>你不知道 v1 和 v2 之间是否还有别的版本，也不知道谁改的。</li></ul><p>git 解决的就是这三件事：<b>相同内容只存一份、每个快照都有说明、快照之间记住先后与分叉</b>。</p>`,
   });
   LEVELS.push({
     id: 'c0-2', chapter: 0, title: '备份地狱：哪个才是最终版？',
@@ -102,6 +105,7 @@
       { text: '运行 git status 看看现在的状态', check: ctx => !!repo(ctx) && ran(ctx, /^git status/) },
     ],
     hints: ['cd project', 'git init', 'git config --global user.name "小王"', 'git config --global user.email "xiaowang@example.com"', 'git status'],
+    feedback(ctx, cmd, res) { if (ctx.world.repoAt('/home/you')) return '⚠️ 你在主目录 <code>~</code> 里执行了 git init，整个主目录都成了仓库（真实世界里这是新手最常见的失误，会把桌面、下载目录全都纳入）。撤销：<code>rm -rf ~/.git</code>，然后 <code>cd project</code> 再 <code>git init</code>。'; return null; },
     done: `<p>注意 status 里的 <b>Untracked files</b>：app.js 在文件夹里，但 git 还没有“跟踪”它。git 不会自作主张备份任何东西，一切由你用 <code>git add</code> 决定。</p><p>试试 <code>ls -a</code>，能看到 <code>.git/</code>。</p>`,
   });
   LEVELS.push({
@@ -116,7 +120,7 @@
       { text: '提交，说明写 "第一次提交"（git commit -m "第一次提交"）', check: ctx => repo(ctx) && repo(ctx).headHash() && repo(ctx).fileAt('HEAD', 'app.js') !== null && repo(ctx).fileAt('HEAD', 'README.md') !== null },
     ],
     hints: ['echo "# 项目说明" > README.md', 'git add app.js README.md  （或 git add .）', 'git status', 'git commit -m "第一次提交"'],
-    done: `<p>看右侧的“原理对比”：这次提交创建了 2 个 blob（文件内容）、1 个 tree（目录快照）、1 个 commit，并把 <code>main</code> 分支指向它。</p><p>试试 <code>git log</code> 和 <code>git cat-file -p HEAD</code>，你会看到 commit 对象的真实内容。</p>`,
+    done: `<p>看右侧的“原理对比”：<code>git add</code> 时创建了 2 个 blob（文件内容），<code>git commit</code> 时创建了 1 个 tree（目录快照）和 1 个 commit，并把 <code>main</code> 分支指向它。</p><p>试试 <code>git log</code> 和 <code>git cat-file -p HEAD</code>，你会看到 commit 对象的真实内容。</p>`,
   });
   LEVELS.push({
     id: 'c1-3', chapter: 1, title: '修改 → 查看差异 → 暂存 → 提交',
@@ -202,7 +206,7 @@
     id: 'c2-4', chapter: 2, title: 'reset 的三种模式',
     intro: `<p><code>git reset &lt;提交&gt;</code> 把当前分支指针挪回去。三种模式决定“暂存区和工作区跟不跟着回去”：</p>
 <table class="mini"><tr><th></th><th>分支指针</th><th>暂存区</th><th>工作区</th></tr><tr><td>--soft</td><td>回退</td><td>不动</td><td>不动</td></tr><tr><td>--mixed（默认）</td><td>回退</td><td>回退</td><td>不动</td></tr><tr><td>--hard</td><td>回退</td><td>回退</td><td>回退</td></tr></table>
-<p>历史现在是：init → "步骤1" → "步骤2" → "调试代码（不该提交）"。任务：先把"步骤1"和"步骤2"<b>合成一个提交</b>（用 --soft），再用 --hard 彻底丢掉最后那个调试提交。注意顺序：先丢掉调试提交更方便。</p>`,
+<p>历史现在是：init → "步骤1" → "步骤2" → "调试代码（不该提交）"。任务分两步：先用 <code>--hard</code> 彻底丢掉最后那个调试提交；再用 <code>--soft</code> 回到 init，把"步骤1"和"步骤2"的改动<b>合成一个提交</b>。</p>`,
     setup(ctx) { newProject(ctx, { 'app.js': 'const app = {};\n' }, 'init'); commit(ctx, { 'step1.js': 'step 1\n' }, '步骤1'); commit(ctx, { 'step2.js': 'step 2\n' }, '步骤2'); commit(ctx, { 'debug.js': 'console.log("debug")\n' }, '调试代码（不该提交）'); },
     tasks: [
       { text: '用 git reset --hard HEAD~1 丢掉“调试代码”提交（debug.js 应从工作区消失）', check: ctx => { const r = repo(ctx); return !r.workdir.has('debug.js') && r.subject(r.headHash()) !== '调试代码（不该提交）'; } },
@@ -222,7 +226,7 @@
       { text: 'git push 把撤销推送出去', check: ctx => srv(ctx) && repo(ctx) && srv(ctx).refs.get('refs/heads/main') === repo(ctx).headHash() && /^Revert/.test(repo(ctx).subject(repo(ctx).headHash())) },
     ],
     hints: ['git log --oneline', 'git revert <那个哈希>  （比如 git revert HEAD~1）', 'git push'],
-    feedback(ctx, cmd, res) { if (/^git reset/.test(cmd) && res.ok) return '⚠️ reset 改写了历史。因为这个提交已经 push 了，push 会被拒绝（除非强推，那会坑到同事）。这里应该用 revert。你可以 <code>git reset --hard origin/main</code> 回到推送过的状态重来。'; return null; },
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git reset/.test(cmd) && res.ok && r.headHash() !== srv(ctx).branchTip('main') && !r.isAncestor(srv(ctx).branchTip('main'), r.headHash())) return '⚠️ reset 把已推送的提交从历史里抹掉了。这样 push 会被拒绝（除非强推，那会坑到同事）。这里应该用 revert。先 <code>git reset --hard origin/main</code> 回到推送过的状态，再重来。'; if (/^git revert/.test(cmd) && res.ok && has(r.fileAt('HEAD', 'tax.js'), '0.5') && /^Revert/.test(r.subject(r.headHash()))) return '🤔 你 revert 的不是那个改税率的提交（tax.js 里还是 0.5）。用 <code>git reset --hard HEAD~1</code> 撤掉这次 revert（它还没推送，可以 reset），再看 <code>git log --oneline</code> 找对提交。'; return null; },
   });
   LEVELS.push({
     id: 'c2-6', chapter: 2, title: 'reflog：找回“消失”的提交',
@@ -240,7 +244,7 @@
   LEVELS.push({
     id: 'c2-7', chapter: 2, title: '误删的分支',
     intro: `<p>同事让你删掉没用的 <code>old-experiment</code> 分支，你顺手把 <code>payment</code> 分支也 <code>-D</code> 了（上面有 2 个没合并的提交）。</p><p>分支只是一个指向提交的指针；指针没了，提交还在。用 reflog 找到 payment 最后指向的提交，<code>git branch payment &lt;哈希&gt;</code> 就能把分支“变回来”。</p>`,
-    setup(ctx) { newProject(ctx, { 'app.js': 'app\n' }, 'init'); sh(ctx, ['cd ' + PROJ, 'git checkout -b payment']); commit(ctx, { 'pay.js': 'pay v1\n' }, '支付功能 v1'); commit(ctx, { 'pay.js': 'pay v2\n' }, '支付功能 v2'); sh(ctx, ['cd ' + PROJ, 'git checkout -b old-experiment', 'git checkout main', 'git branch -D old-experiment', 'git branch -D payment']); },
+    setup(ctx) { newProject(ctx, { 'app.js': 'app\n' }, 'init'); sh(ctx, ['cd ' + PROJ, 'git checkout -b payment']); commit(ctx, { 'pay.js': 'pay v1\n' }, '支付功能 v1'); commit(ctx, { 'pay.js': 'pay v2\n' }, '支付功能 v2'); sh(ctx, ['cd ' + PROJ, 'git checkout main', 'git checkout -b old-experiment', 'git checkout main', 'git branch -D old-experiment', 'git branch -D payment']); },
     tasks: [
       { text: 'git branch 确认 payment 不见了', check: ctx => ran(ctx, /^git branch\s*$/) },
       { text: '在 git reflog 里找到 "支付功能 v2" 对应的提交', check: ctx => ran(ctx, /^git reflog/) },
@@ -262,6 +266,7 @@
       { text: '用 git log --oneline --graph --all 看两条分支', check: ctx => ran(ctx, /^git log.*--all/) },
     ],
     hints: ['git switch -c feature/dark-mode', 'echo "body { background: #000 }" > theme.css && git add theme.css && git commit -m "深色主题"', 'git switch main && ls', 'git log --oneline --graph --all'],
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git commit/.test(cmd) && res.ok && r.currentBranch() === 'main' && r.fileAt('main', 'theme.css') !== null) return '⚠️ 你把提交做在了 main 上——<code>git branch 名字</code> 只创建分支不切换，<code>git switch -c</code> 或 <code>git checkout -b</code> 才会切过去。补救：<code>git branch -f feature/dark-mode</code>（把分支指到这里）然后 <code>git reset --hard HEAD~1</code> 让 main 退回去。'; return null; },
   });
   LEVELS.push({
     id: 'c3-2', chapter: 3, title: '快进合并（Fast-forward）',
@@ -272,6 +277,7 @@
       { text: '删除 feature 分支', check: ctx => repo(ctx).branchTip('feature') === null && repo(ctx).fileAt('main', 'feature.js') === 'feature v2\n' },
     ],
     hints: ['git merge feature', 'git branch -d feature'],
+    feedback(ctx, cmd, res) { if (/^git merge.*--no-ff/.test(cmd) && res.ok) return '💡 你用了 <code>--no-ff</code>，git 生成了一个合并提交而不是快进。本关想让你看的是快进：<code>git reset --hard ORIG_HEAD</code> 撤销这次合并，再 <code>git merge feature</code>。'; return null; },
     done: `<p>快进合并不产生合并提交，历史是一条直线。如果你想保留“这里曾经有个分支”的痕迹，可以用 <code>git merge --no-ff</code>。</p>`,
   });
   LEVELS.push({
@@ -308,6 +314,7 @@
       { text: '切到 main，快进合并 feature（历史应为一条直线，没有合并提交）', check: ctx => { const r = repo(ctx); const m = r.branchTip('main'); return r.currentBranch() === 'main' && m === r.branchTip('feature') && r.fileAt(m, 'feature.js') === 'feature v2\n' && r.revList([m]).every(h => r.getCommit(h).parents.length < 2); } },
     ],
     hints: ['git rebase main', 'git switch main && git merge feature'],
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git rebase feature/.test(cmd) && res.ok && r.currentBranch() === 'main') return '⚠️ 方向反了：你在 main 上 rebase 到 feature，等于把 main 的“修复 bug”挪到了 feature 后面。惯例是<b>在功能分支上 rebase 到主分支</b>。撤销：<code>git reset --hard ORIG_HEAD</code>，然后 <code>git switch feature && git rebase main</code>。'; return null; },
   });
   LEVELS.push({
     id: 'c3-6', chapter: 3, title: 'cherry-pick：只要那一个提交',
@@ -318,18 +325,19 @@
       { text: '在 main 上 cherry-pick 它（core.js 应变为 safe，且 main 上没有 wip.js）', check: ctx => { const r = repo(ctx); return r.currentBranch() === 'main' && has(r.fileAt('main', 'core.js'), 'safe') && r.fileAt('main', 'wip.js') === null && r.fileAt('main', 'wip2.js') === null; } },
     ],
     hints: ['git log dev --oneline', 'git cherry-pick <哈希>'],
-    feedback(ctx, cmd, res) { if (repo(ctx).fileAt('main', 'wip.js') !== null) return '⚠️ 半成品也进 main 了——你大概用了 merge。用 <code>git reset --hard HEAD~1</code>（或 reflog）回退，然后只 cherry-pick 那一个提交。'; return null; },
+    feedback(ctx, cmd, res) { if (repo(ctx).fileAt('main', 'wip.js') !== null) return '⚠️ 半成品也进 main 了——你大概用了 merge。用 <code>git reset --hard ORIG_HEAD</code>（合并前 git 会把原来的位置记在 ORIG_HEAD）回退，然后只 cherry-pick 那一个提交。'; return null; },
   });
   LEVELS.push({
     id: 'c3-7', chapter: 3, title: 'stash：手头的活先放一放',
     intro: `<p>你在 feature 分支上改到一半（还不想提交），突然要切到 main 修一个紧急 bug。直接切换会被拒绝（改动会被覆盖）或把半成品带过去。</p><p><code>git stash</code> 把工作区/暂存区的改动打包存起来，工作区恢复干净；修完 bug 回来 <code>git stash pop</code> 再取出来。</p>`,
-    setup(ctx) { newProject(ctx, { 'app.js': 'const app = {};\n', 'feature.js': '// todo\n' }, 'init'); sh(ctx, ['cd ' + PROJ, 'git switch -c feature']); write(ctx, PROJ + '/feature.js', '// todo\nfunction half() {\n  // 写到一半\n'); write(ctx, PROJ + '/app.js', 'const app = {};\nconst bug = true;\n'); },
+    setup(ctx) { newProject(ctx, { 'app.js': 'const app = {};\n', 'feature.js': '// todo\n' }, 'init'); sh(ctx, ['cd ' + PROJ, 'git switch -c feature', 'git switch main']); commit(ctx, { 'app.js': 'const app = {};\n// main 上的日常改动\n' }, 'main 上的日常改动'); sh(ctx, ['cd ' + PROJ, 'git switch feature']); write(ctx, PROJ + '/feature.js', '// todo\nfunction half() {\n  // 写到一半\n'); write(ctx, PROJ + '/app.js', 'const app = {};\nconst bug = true;\n'); },
     tasks: [
       { text: '试着 git switch main，看看 git 怎么说；然后 git stash', check: ctx => repo(ctx).stash.length >= 1 || ran(ctx, /^git stash pop|^git stash apply/) },
-      { text: '切到 main，把 app.js 里的内容改为修复版并提交 "紧急修复"', check: ctx => { const r = repo(ctx); const m = r.branchTip('main'); return m && r.subject(m) === '紧急修复'; } },
-      { text: '切回 feature，git stash pop 取回半成品（feature.js 应包含 half）', check: ctx => { const r = repo(ctx); return r.currentBranch() === 'feature' && has(r.workdir.get('feature.js'), 'half') && r.stash.length === 0; } },
+      { text: '切到 main，把 app.js 里的内容改为修复版并提交 "紧急修复"', check: ctx => { const r = repo(ctx); const m = r.branchTip('main'); return m && r.subject(m) === '紧急修复' && r.fileAt(m, 'feature.js') === '// todo\n'; } },
+      { text: '切回 feature，git stash pop 取回半成品（feature.js 应包含 half）', check: ctx => { const r = repo(ctx); return ran(ctx, /^git stash (pop|apply)/) && r.currentBranch() === 'feature' && has(r.workdir.get('feature.js'), 'half') && r.stash.length === 0; } },
     ],
-    hints: ['git switch main （注意报错）→ git stash', 'git switch main && echo "const app = { fixed: true };" > app.js && git commit -am "紧急修复"', 'git switch feature && git stash pop'],
+    hints: ['git switch main （会被拒绝，因为 app.js 的改动会被覆盖）→ git stash', 'git switch main && echo "const app = { fixed: true };" > app.js && git commit -am "紧急修复"', 'git switch feature && git stash pop'],
+    feedback(ctx, cmd, res) { const r = repo(ctx); const m = r.branchTip('main'); if (/^git commit/.test(cmd) && res.ok && r.currentBranch() === 'main' && m && has(r.fileAt(m, 'feature.js'), 'half')) return '⚠️ 半成品 feature.js 被一起提交进 main 了（<code>-a</code> 会把所有已跟踪文件的修改都提交）。<code>git reset --hard HEAD~1</code> 撤销，回到 feature 先 stash。'; return null; },
   });
   LEVELS.push({
     id: 'c3-8', chapter: 3, title: 'tag：给版本起个名字',
@@ -358,11 +366,11 @@
     tasks: [
       { text: 'git merge feature，看到 CONFLICT', check: ctx => ranAny(ctx, /^git merge feature/) },
       { text: 'cat greeting.js 观察冲突标记，然后编辑文件解决（edit greeting.js）', check: ctx => { const c = repo(ctx).workdir.get('greeting.js'); return noMarkers(c) && has(c, 'name.trim()') && has(c, '"Hi, "') && has(c, '"!"'); } },
-      { text: 'git add greeting.js 标记已解决，git status 看看提示', check: ctx => !repo(ctx).conflicts.size && repo(ctx).index.has('greeting.js') && (has(repo(ctx).blobContent(repo(ctx).index.get('greeting.js')), 'trim') || repo(ctx).getCommit(repo(ctx).headHash()).parents.length === 2) },
+      { text: 'git add greeting.js 标记已解决，git status 看看提示', check: ctx => { const r = repo(ctx); if (!ran(ctx, /^git add/)) return false; const staged = r.index.has('greeting.js') ? r.blobContent(r.index.get('greeting.js')) : null; return !r.conflicts.size && noMarkers(staged) && has(staged, 'name.trim()') && has(staged, '"Hi, "') && (r.state.merge || r.getCommit(r.headHash()).parents.length === 2); } },
       { text: 'git commit 完成合并（会生成合并提交）', check: ctx => { const r = repo(ctx); const h = r.branchTip('main'); const c = r.fileAt(h, 'greeting.js'); return r.getCommit(h).parents.length === 2 && noMarkers(c) && has(c, 'name.trim()') && has(c, '"Hi, "'); } },
     ],
     hints: ['git merge feature', 'edit greeting.js，把内容改成：\nexport function greet(name) {\n  return "Hi, " + name.trim() + "!";\n}', 'git add greeting.js && git status', 'git commit -m "合并 feature，解决冲突"'],
-    feedback(ctx, cmd, res) { if (/^git add/.test(cmd) && res.ok) { const c = repo(ctx).workdir.get('greeting.js'); if (!noMarkers(c)) return '🚨 你 add 了一个还带着 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> 标记的文件！git 不会阻止你（它以为你解决了），但这样提交出去代码就坏了。先 <code>edit greeting.js</code> 把标记删掉。'; } return null; },
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git add/.test(cmd) && res.ok) { const c = r.workdir.get('greeting.js'); if (!noMarkers(c)) return '🚨 你 add 了一个还带着 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> 标记的文件！git 不会阻止你（它以为你解决了），但这样提交出去代码就坏了。先 <code>edit greeting.js</code> 把标记删掉。'; } if (/^git commit/.test(cmd) && res.ok && !noMarkers(r.fileAt('HEAD', 'greeting.js'))) return '🚨 冲突标记被提交进历史了。补救：<code>edit greeting.js</code> 改好 → <code>git add greeting.js</code> → <code>git commit --amend -m "合并 feature"</code>（amend 会保留两个父提交）。'; return null; },
   });
   LEVELS.push({
     id: 'c4-2', chapter: 4, title: '中止合并 & 直接选一边',
@@ -385,7 +393,7 @@
       { text: 'git log --oneline --graph --all 确认历史是直线', check: ctx => ran(ctx, /^git log.*--graph/) && !repo(ctx).state.rebase && repo(ctx).isAncestor(repo(ctx).branchTip('main'), repo(ctx).branchTip('feature')) },
     ],
     hints: ['git rebase main', 'edit greeting.js 改成最终版本 → git add greeting.js → git rebase --continue', 'git log --oneline --graph --all'],
-    feedback(ctx, cmd, res) { if (/^git commit/.test(cmd) && repo(ctx).state.rebase) return '💡 rebase 过程中不用 commit，而是 <code>git add</code> 之后 <code>git rebase --continue</code>。'; return null; },
+    feedback(ctx, cmd, res) { if (/^git commit/.test(cmd) && repo(ctx).state.rebase) return '💡 rebase 过程中不用 commit，而是 <code>git add</code> 之后 <code>git rebase --continue</code>。'; if (/^git rebase --skip/.test(cmd) && res.ok) return '⚠️ <code>--skip</code> 把你 feature 上的那个提交<b>整个丢掉了</b>（“问候语改成 Hi”没了）。这不是解决冲突，是放弃。<code>git reset --hard ORIG_HEAD</code> 回到 rebase 之前重来。'; return null; },
   });
   LEVELS.push({
     id: 'c4-4', chapter: 4, title: '修改/删除冲突',
@@ -441,7 +449,7 @@
 <p>解决：<code>git pull</code> 把远程的合进来。因为历史分叉了，新版本 git 会要求你明确策略：<code>git pull --no-rebase</code>（合并，产生合并提交）或 <code>git pull --rebase</code>（把你的提交挪到最后，历史干净）。团队一般偏好 rebase。然后再 push。</p>`,
     setup(ctx) { collab(ctx, { 'README.md': '# 团队项目\n', 'app.js': 'console.log(1)\n' }); asXm(ctx, ['echo "小明的功能" > xiaoming.js', 'git add .', 'git commit -m "小明：新增功能"', 'git push']); commit(ctx, { 'you.js': '我的功能\n' }, '我：新增功能'); },
     tasks: [
-      { text: 'git push，看到 rejected', check: ctx => ctx.world.log.some(l => /^git push/.test(l.line) && !l.ok) },
+      { text: 'git push，看到 rejected', observe: true, check: ctx => ctx.world.log.some(l => /^git push/.test(l.line) && !l.ok) },
       { text: 'git pull --rebase（或 --no-rebase）整合小明的提交', check: ctx => { const r = repo(ctx); return r.isAncestor(srv(ctx).branchTip('main'), r.branchTip('main')) && r.fileAt('main', 'you.js') !== null && r.fileAt('main', 'xiaoming.js') !== null; } },
       { text: '再 push，远程应同时包含你和小明的提交', check: ctx => { const s = srv(ctx); const t = s.branchTip('main'); return s.fileAt(t, 'you.js') !== null && s.fileAt(t, 'xiaoming.js') !== null; } },
     ],
@@ -483,16 +491,16 @@
   });
   LEVELS.push({
     id: 'c5-7', chapter: 5, title: '强推的代价与 --force-with-lease',
-    intro: `<p>你推送了 "add feature" 之后发现忘了带上测试文件，于是 <code>git commit --amend</code> 把 feature.test.js 补进去了。现在本地和远程分叉，push 被拒绝。你想“这是我自己的提交，覆盖就好”，于是打算 <code>--force</code>。</p><p>但你不知道的是：<b>小明刚刚在远程 main 上又推了一个提交</b>。<code>git push --force</code> 会把它抹掉。</p><p>正确姿势：<code>git push --force-with-lease</code>——只有当远程还是“你上次看到的样子”时才允许覆盖。它会拒绝，你就会发现小明的提交，然后 fetch + rebase 再推（rebase 会把你补的测试文件作为新提交放到小明的提交之后）。</p>`,
+    intro: `<p>你推送了 "add feature" 之后发现忘了带上测试文件，于是 <code>git commit --amend</code> 把 feature.test.js 补进去了。现在本地和远程分叉，push 被拒绝。你想“这是我自己的提交，覆盖就好”，于是打算 <code>--force</code>。</p><p>但你不知道的是：<b>小明刚刚在远程 main 上又推了一个提交</b>。<code>git push --force</code> 会把它抹掉。</p><p>正确姿势：<code>git push --force-with-lease</code>——只有当远程还是“你上次看到的样子”时才允许覆盖。它会拒绝，你就会发现小明的提交，然后 fetch + rebase 再推（rebase 会把你补的测试文件作为新提交放到小明的提交之后）。</p><p class="warn">经典陷阱：<b>先 git fetch 再 --force-with-lease 就不再保护了</b>——fetch 更新了 origin/main，lease 认为你“已经知道”小明的提交。所以 fetch 之后一定要先看 <code>git log origin/main</code>。（新版 git 有 <code>--force-if-includes</code> 进一步补这个洞。）</p>`,
     setup(ctx) { collab(ctx, { 'app.js': 'const app = {};\n' }); commit(ctx, { 'feature.js': 'feature\n' }, 'add feature'); sh(ctx, ['cd ' + PROJ, 'git push']); write(ctx, PROJ + '/feature.test.js', 'test feature\n'); sh(ctx, ['cd ' + PROJ, 'git add feature.test.js', 'git commit --amend -m "add feature (with tests)"']); asXm(ctx, ['git pull', 'echo "小明的重要工作" > important.js', 'git add .', 'git commit -m "小明：重要工作"', 'git push']); },
     tasks: [
-      { text: 'git push 看到 rejected', check: ctx => ctx.world.log.some(l => /^git push\s*$/.test(l.line) && !l.ok) },
-      { text: 'git push --force-with-lease，看它如何保护小明（stale info）', check: ctx => ctx.world.log.some(l => /^git push.*--force-with-lease/.test(l.line) && !l.ok) },
+      { text: 'git push 看到 rejected', observe: true, check: ctx => ctx.world.log.some(l => /^git push\s*$/.test(l.line) && !l.ok) },
+      { text: 'git push --force-with-lease，看它如何保护小明（stale info）', observe: true, check: ctx => ctx.world.log.some(l => /^git push.*--force-with-lease/.test(l.line) && !l.ok) },
       { text: 'git fetch，git log origin/main --oneline 发现小明的提交；然后 git rebase origin/main', check: ctx => { const r = repo(ctx); return r.fileAt('main', 'important.js') !== null && r.fileAt('main', 'feature.test.js') !== null && r.isAncestor(srv(ctx).branchTip('main'), r.branchTip('main')); } },
       { text: 'git push（现在是快进，不需要强推）。远程应同时有小明的提交和你的测试文件', check: ctx => { const s = srv(ctx); const t = s.branchTip('main'); return s.fileAt(t, 'important.js') !== null && s.fileAt(t, 'feature.test.js') !== null; } },
     ],
     hints: ['git push', 'git push --force-with-lease', 'git fetch && git log origin/main --oneline && git rebase origin/main', 'git push'],
-    feedback(ctx, cmd, res) { if (/^git push (-f|--force)(\s|$)/.test(cmd) && res.ok) return '🚨 强推成功了——代价是小明的“重要工作”从远程消失了（看“多人”标签）。真实世界里只能指望小明本地还有。点“重置本关”，这次用 <code>--force-with-lease</code>。'; return null; },
+    feedback(ctx, cmd, res) { if (/^git push (-f|--force)(\s|$)/.test(cmd) && res.ok) return '🚨 强推成功了——代价是小明的“重要工作”从远程消失了（看“多人”标签）。真实世界里只能指望小明本地还有。点“重置本关”，这次用 <code>--force-with-lease</code>。'; if (/--force-with-lease/.test(cmd) && res.ok && /forced update/.test(res.out || '') && srv(ctx).fileAt(srv(ctx).branchTip('main'), 'important.js') === null) return '🚨 中了经典陷阱：你先 fetch 了，origin/main 已经更新成小明的提交，于是 --force-with-lease 认为你“知情”，放行了强推——小明的工作还是没了。fetch 之后要先看 <code>git log origin/main</code>，再决定 rebase 而不是强推。点“重置本关”重来。'; return null; },
   });
 
   /* ================= 第 6 章 ================= */
@@ -540,6 +548,7 @@
       { text: 'git clean -n 预览，再 git clean -fd 删除 dist/ 和 cache.tmp', check: ctx => { const r = repo(ctx); return ran(ctx, /^git clean -n|^git clean --dry-run/) && !r.workdir.has('dist/bundle.js') && !r.workdir.has('cache.tmp') && r.workdir.has('notes.md'); } },
     ],
     hints: ['git status', 'git add notes.md', 'git clean -n && git clean -fd'],
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git clean/.test(cmd) && res.ok && !r.workdir.has('notes.md') && !r.index.has('notes.md')) return '🪦 notes.md 没了，而且<b>真的找不回来</b>：它从没 add 过，对象库里没有它的副本，reflog 也帮不上忙。这就是为什么 clean 之前一定要 <code>-n</code> 预览。点“重置本关”重来。'; return null; },
     done: `<p>注意 debug.log 没被删：它被 .gitignore 忽略，clean 默认不动忽略文件（加 -x 才会）。</p>`,
   });
 
@@ -550,7 +559,7 @@
     setup(ctx) { collab(ctx, { 'tax.js': 'export const RATE = 0.13;\nexport function tax(amount) {\n  return amount * RATE;\n}\n', 'app.js': 'app\n' }); asXm(ctx, ['printf "export const RATE = 0.13;\\nexport function tax(amount) {\\n  return Math.round(amount * RATE * 100) / 100;\\n}\\n" > tax.js', 'git commit -am "小明：税额保留两位小数"', 'git push']); sh(ctx, ['cd ' + PROJ, 'git pull']); commit(ctx, { 'app.js': 'app v2\n' }, '我：更新 app'); asXm(ctx, ['printf "export const RATE = 0.31;\\nexport function tax(amount) {\\n  return Math.round(amount * RATE * 100) / 100;\\n}\\n" > tax.js', 'git commit -am "小明：调整常量"', 'git push']); sh(ctx, ['cd ' + PROJ, 'git pull --rebase']); commit(ctx, { 'app.js': 'app v3\n' }, '我：再更新 app'); sh(ctx, ['cd ' + PROJ, 'git push']); },
     tasks: [
       { text: 'git blame tax.js 找到把 RATE 改成 0.31 的提交', check: ctx => ran(ctx, /^git blame tax\.js/) },
-      { text: 'git show <那个提交> 看看它改了什么', check: ctx => { const r = repo(ctx); const bad = r.revList([r.headHash()]).find(h => r.subject(h) === '小明：调整常量'); return ctx.world.log.some(l => l.ok && new RegExp('^git show ' + bad.slice(0, 4)).test(l.line)); } },
+      { text: 'git show <那个提交> 看看它改了什么', check: ctx => { const bad = findCommit(ctx, '小明：调整常量'); return !!bad && ranOn(ctx, 'show', bad.hash); } },
       { text: 'git revert 它并 push（tax.js 的 RATE 应恢复 0.13，保留两位小数的逻辑不变）', check: ctx => { const s = srv(ctx); const c = s.fileAt(s.branchTip('main'), 'tax.js'); return has(c, '0.13') && has(c, 'Math.round'); } },
     ],
     hints: ['git blame tax.js', 'git show <哈希>', 'git revert <哈希> && git push'],
@@ -561,7 +570,7 @@
     setup(ctx) { newProject(ctx, { 'form.js': 'function validate(input) {\n  return input.length > 0;\n}\nfunction submit(input) {\n  if (!validate(input)) return;\n  send(input);\n}\n', 'app.js': 'app\n' }, 'init'); commit(ctx, { 'app.js': 'app 2\n' }, '改动 1'); commit(ctx, { 'form.js': 'function submit(input) {\n  send(input);\n}\n' }, '简化表单代码'); commit(ctx, { 'app.js': 'app 3\n' }, '改动 3'); commit(ctx, { 'app.js': 'app 4\n' }, '改动 4'); },
     tasks: [
       { text: 'git log -S "validate(" --oneline 找到相关提交', check: ctx => ran(ctx, /^git log.*-S/) },
-      { text: 'git show 那个删除了校验的提交', check: ctx => { const r = repo(ctx); const bad = r.revList([r.headHash()]).find(h => r.subject(h) === '简化表单代码'); return ctx.world.log.some(l => l.ok && (new RegExp('^git show ' + bad.slice(0, 4)).test(l.line) || /^git show HEAD~2/.test(l.line))); } },
+      { text: 'git show 那个删除了校验的提交', check: ctx => { const bad = findCommit(ctx, '简化表单代码'); return !!bad && ranOn(ctx, 'show', bad.hash); } },
       { text: '恢复校验逻辑并提交（form.js 需重新包含 validate，app.js 保持 "app 4"）', check: ctx => has(headFile(ctx, 'form.js'), 'validate(input)') && headFile(ctx, 'app.js') === 'app 4\n' },
     ],
     hints: ['git log -S "validate(" --oneline', 'git show <哈希>', 'git revert <哈希>   或   git checkout <哈希>~1 -- form.js && git commit -m "恢复校验"'],
@@ -577,18 +586,20 @@
       for (let i = 1; i <= 15; i++) {
         const files = {};
         if (i !== 9) { changelog += `- 改动 ${i}\n`; files['changelog.md'] = changelog; }
-        if (i === 9) files['calc.js'] = 'export function add(a, b) {\n  return a + b;\n}\nexport function mul(a, b) {\n  return a * b + 1; // 性能优化?\n}\n';
+        files['calc.js'] = `// calc v${i === 9 ? 8 : i}\nexport function add(a, b) {\n  return a + b;\n}\nexport function mul(a, b) {\n  return a * b${i >= 9 ? ' + 1; // 性能优化?' : ';'}\n}\n`;
+        if (false) files['calc.js'] = 'export function add(a, b) {\n  return a + b;\n}\nexport function mul(a, b) {\n  return a * b + 1; // 性能优化?\n}\n';
         commit(ctx, files, `日常改动 ${i}`);
       }
-      ctx.world.testRunner = (r) => { if (!r) return { out: 'npm ERR! 不在项目目录', ok: false }; const c = r.workdir.get('calc.js') || ''; const ok = c.includes('a * b;'); return { out: ok ? '> test\n\n  ✓ add(2, 3) === 5\n  ✓ mul(2, 3) === 6\n\n2 passing' : '> test\n\n  ✓ add(2, 3) === 5\n  ✗ mul(2, 3) === 6\n    AssertionError: expected 7 to equal 6\n\n1 passing, 1 failing', ok }; };
+      ctx.world.testRunner = (r) => { if (!r) return { out: 'npm ERR! 不在项目目录', ok: false }; const c = r.workdir.get('calc.js') || ''; const ok = c.includes('a * b;'); ctx.state.lastTest = ok; return { out: ok ? '> test\n\n  ✓ add(2, 3) === 5\n  ✓ mul(2, 3) === 6\n\n2 passing' : '> test\n\n  ✓ add(2, 3) === 5\n  ✗ mul(2, 3) === 6\n    AssertionError: expected 7 to equal 6\n\n1 passing, 1 failing', ok }; };
     },
     tasks: [
       { text: 'npm test 确认当前失败；git bisect start，标记 bad 和 good v1.0', check: ctx => ranAny(ctx, /^npm test|^make test/) && ran(ctx, /^git bisect (good|bad)/) },
       { text: '反复 npm test + git bisect good/bad，直到 git 报告 "is the first bad commit"（应是 "日常改动 9"）', check: ctx => { const r = repo(ctx); const st = r.state.bisect; const bad = r.revList([r.branchTip('main')]).find(h => r.subject(h) === '日常改动 9'); return (st && st.found === bad) || ctx.state.found === bad; } },
       { text: 'git bisect reset 回到 main，然后 git revert 那个提交，npm test 通过', check: ctx => { const r = repo(ctx); return !r.state.bisect && r.currentBranch() === 'main' && has(r.fileAt('main', 'calc.js'), 'a * b;') && r.subject(r.headHash()).startsWith('Revert'); } },
     ],
+    feedback(ctx, cmd, res) { const r = repo(ctx); if (/^git bisect (good|bad)\s*$/.test(cmd) && res.ok && ctx.state.lastTest !== undefined) { const saidGood = /good/.test(cmd); if (saidGood !== ctx.state.lastTest) return `🤔 刚才 npm test 是${ctx.state.lastTest ? '通过' : '失败'}的，你却标记了 ${saidGood ? 'good' : 'bad'}。标反一次 bisect 就会指向错误的提交。<code>git bisect log</code> 能看记录；实在乱了就 <code>git bisect reset</code> 重来。`; ctx.state.lastTest = undefined; } if (/^git (revert|commit)/.test(cmd) && r.state.bisect) return '⚠️ bisect 进行中不要提交——你现在在 detached HEAD 上，提交会挂在半空。先 <code>git bisect reset</code> 回到 main 再修。'; return null; },
     hints: ['npm test（失败）→ git bisect start → git bisect bad → git bisect good v1.0', '每一步：npm test → 通过就 git bisect good，失败就 git bisect bad', 'git bisect reset && git revert <肇事提交> && npm test'],
-    onCommand(ctx, cmd, res) { const r = repo(ctx); if (r && r.state.bisect && r.state.bisect.found) ctx.state.found = r.state.bisect.found; return null; },
+    onCommand(ctx, cmd, res) { const r = repo(ctx); if (r && r.state.bisect && r.state.bisect.found) ctx.state.found = r.state.bisect.found; if (/^npm test|^make test|^pytest/.test(cmd)) ctx.state.lastTest = res.ok; return null; },
   });
   LEVELS.push({
     id: 'c7-4', chapter: 7, title: '两个版本之间到底改了什么？',

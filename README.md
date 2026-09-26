@@ -5,6 +5,15 @@
 - 🎬 教学视频：[`media/tutorial.mp4`](media/tutorial.mp4)（约 5 分钟）
 - 📣 宣传视频：[`media/promo.mp4`](media/promo.mp4)（约 1 分钟）
 
+## 像游戏一样玩
+
+- **星级与经验**：每关按是否看提示评 1–3 星，星星换 XP，XP 换称号（git 萌新 → 提交学徒 → 分支玩家 → … → Git 大师）。
+- **成就**：18 个成就，例如“冲突终结者”“reflog 救援队”“二分侦探”，也有反面教材“翻车现场”（强推覆盖了同事的提交）。
+- **关卡地图**：9 章 42 关的路线图，显示完成度、星级和推荐的下一关；所有关卡都可以直接跳。
+- **导师与同事**：导师 🧙 在终端下方给出针对性纠错；同事小明 🧑‍💻 / 小红 👩‍💻 会真的在他们的克隆里提交并推送。
+- **即时反馈**：任务打勾有动画和音效，通关有彩带；终端输出按真实 git 的配色高亮；点击讲解里的任何命令即可填入终端。
+- **随时试错**：刷新页面会回放本关的操作，进度不丢；“重置本关”一键回到初始状态；“🔬 显示底层”开关在终端里内联显示每条命令创建了哪些对象、移动了哪个指针。
+
 ## 三个设计原则
 
 1. **真实的 git 逻辑，真实的输出。** 每条命令的行为和报错都尽量与真实 git 2.4x 一致：`git status` 的措辞、`non-fast-forward` 的拒绝、`detached HEAD` 的长篇提示、`Need to specify how to reconcile divergent branches`、冲突标记、reflog 记录……哈希是真的 SHA-1（空 blob 就是 `e69de29…`，空 tree 就是 `4b825dc…`）。
@@ -56,8 +65,9 @@ js/gitcmd.js      各子命令实现与 git 风格输出
 js/shell.js       虚拟文件系统 + shell + 多用户/远程
 js/analogy.js     “原理对比”文案与快照文件夹视图
 js/levels.js      章节与关卡（setup / tasks / hints / feedback）
-js/ui.js          终端、SVG 提交图、三棵树表、多仓库视图
-js/main.js        关卡加载、命令执行、反馈、进度（localStorage）
+js/ui.js          终端（含输出高亮）、SVG 提交图、三棵树表、多仓库视图
+js/game.js        星级 / 经验 / 成就 / 音效 / 彩带 / 关卡地图 / 新手引导
+js/main.js        关卡加载、命令执行、反馈、进度与本关回放（localStorage）
 test/engine.test.js   引擎回归测试（node test/engine.test.js）
 test/levels.test.js   每一关按提示自动通关的可解性测试
 test/browser.test.js  Playwright 浏览器冒烟测试
@@ -77,6 +87,7 @@ node test/browser.test.js    # 需要 Playwright + Chromium
 ## 已知限制
 
 - 不支持交互式命令（`git add -p`、`git rebase -i`）；`git commit` 不带 `-m` 会打开页面内编辑器。
+- tree / commit 对象按文本序列化，所以 tree 和 commit 的哈希与真实 git 不同（blob 哈希完全一致，可以用 `git hash-object` 核对）。
 - 远程仓库用本地路径模拟（`/srv/git/project.git`），`https://github.com/team/project.git` 是它的别名；没有网络、没有权限系统（只模拟了保护分支钩子）。
 - 空目录不被记录（和 git 一样），`mkdir` 在仓库内只是提示。
 - 时间是逻辑时钟，日期从 2026-01-05 起每步递增，保证提交顺序稳定。

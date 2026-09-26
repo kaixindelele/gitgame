@@ -110,6 +110,8 @@
       if (eq(o, t)) { out.push(...o); return; }
       if (eq(b, o)) { out.push(...t); return; }
       if (eq(b, t)) { out.push(...o); return; }
+      if (labels.favor === 'ours') { out.push(...o); return; }
+      if (labels.favor === 'theirs') { out.push(...t); return; }
       conflicts++;
       out.push(`<<<<<<< ${labels.ours}`);
       out.push(...o);

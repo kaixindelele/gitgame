@@ -6,6 +6,33 @@
   const $ = sel => document.querySelector(sel);
   const COLORS = ['#6cb6ff', '#5fd38d', '#f2c94c', '#c792ea', '#f5a25d', '#ff6b6b', '#4dd0e1', '#ff8fab'];
 
+  /* ---------- 终端输出高亮（模仿真实 git 的配色） ---------- */
+  function highlight(text) {
+    let section = null;
+    return text.split('\n').map(line => {
+      const e = esc(line);
+      if (/^(Changes to be committed|Changes not staged for commit|Untracked files|Unmerged paths):/.test(line)) { section = line.startsWith('Changes to be') ? 'staged' : line.startsWith('Untracked') ? 'untracked' : line.startsWith('Unmerged') ? 'conflict' : 'unstaged'; return `<span class="hl-section">${e}</span>`; }
+      if (/^\t/.test(line) && section) return `<span class="hl-${section === 'conflict' ? 'unstaged' : section}">${e}</span>`;
+      if (/^(diff --git|index [0-9a-f]+\.\.|new file mode|deleted file mode)/.test(line)) return `<span class="hl-meta">${e}</span>`;
+      if (/^\+\+\+ |^--- /.test(line)) return `<span class="hl-meta">${e}</span>`;
+      if (/^@@/.test(line)) return `<span class="hl-hunk">${e}</span>`;
+      if (/^\+/.test(line)) return `<span class="hl-add">${e}</span>`;
+      if (/^-/.test(line) && !/^- \[deleted\]/.test(line)) return `<span class="hl-del">${e}</span>`;
+      if (/^\s*(<<<<<<<|=======|>>>>>>>)/.test(line)) return `<span class="hl-marker">${e}</span>`;
+      if (/CONFLICT/.test(line)) return `<span class="hl-conflict">${e}</span>`;
+      if (/is the first bad commit/.test(line)) return `<span class="hl-found">${e}</span>`;
+      if (/^(error|fatal):/.test(line) || /\[rejected\]|\[remote rejected\]|Aborting|Automatic merge failed/.test(line)) return `<span class="hl-err">${e}</span>`;
+      if (/^hint:/.test(line)) return `<span class="hl-hint">${e}</span>`;
+      if (/^(warning|Warning):/.test(line)) return `<span class="hl-warn">${e}</span>`;
+      if (/^(Fast-forward|Successfully rebased|Merge made by|Switched to|Already up to date|Saved working directory|Deleted branch|Dropped refs)/.test(line) || /\[new branch\]|\[new tag\]/.test(line)) return `<span class="hl-ok">${e}</span>`;
+      const deco = e.replace(/\((HEAD[^)]*)\)/, (m, inner) => '(' + inner.split(', ').map(d => d.startsWith('HEAD') ? `<span class="hl-head">${d}</span>` : d.startsWith('tag: ') ? `<span class="hl-tag">${d}</span>` : /\//.test(d) ? `<span class="hl-remote">${d}</span>` : `<span class="hl-branch">${d}</span>`).join(', ') + ')');
+      if (/^commit [0-9a-f]{40}/.test(line)) return deco.replace(/^(commit [0-9a-f]{40})/, '<span class="hl-hash">$1</span>');
+      if (/^[0-9a-f]{7,8} /.test(line)) return deco.replace(/^([0-9a-f]{7,8})/, '<span class="hl-hash">$1</span>');
+      if (/^\[[^\]]+ [0-9a-f]{7}\]/.test(line)) return e.replace(/^(\[[^\]]+\])/, '<span class="hl-ok">$1</span>');
+      return deco;
+    }).join('\n');
+  }
+
   /* ---------- 终端 ---------- */
   class Terminal {
     constructor(el, opts) {
@@ -15,7 +42,8 @@
       el.addEventListener('click', e => { if (e.target.closest('a,button')) return; if (window.getSelection().toString()) return; this.input.focus(); });
     }
     setPrompt(p) { this.promptEl.textContent = p; }
-    append(text, cls = 't-out') { if (text === '' || text == null) return; const d = document.createElement('div'); d.className = cls; d.textContent = text; this.out.appendChild(d); this.scroll(); }
+    append(text, cls = 't-out') { if (text === '' || text == null) return; const d = document.createElement('div'); d.className = cls; if (cls === 't-out' || cls === 't-err') d.innerHTML = highlight(text); else d.textContent = text; this.out.appendChild(d); this.scroll(); }
+    mate(avatar, who, prompt, line, output) { const d = document.createElement('div'); d.className = 't-mate'; d.innerHTML = `<span class="avatar">${avatar}</span><div><span class="prompt">${esc(who)} ${esc(prompt)}</span>${esc(line)}${output ? '\n' + highlight(output) : ''}</div>`; this.out.appendChild(d); this.scroll(); }
     appendHtml(html, cls) { const d = document.createElement('div'); d.className = cls || 't-out'; d.innerHTML = html; this.out.appendChild(d); this.scroll(); }
     echoCommand(prompt, line, cls = 't-cmd') { const d = document.createElement('div'); d.className = cls; const p = document.createElement('span'); p.className = 'prompt'; p.textContent = prompt; d.appendChild(p); d.appendChild(document.createTextNode(line)); this.out.appendChild(d); this.scroll(); }
     clear() { this.out.innerHTML = ''; }
@@ -66,8 +94,12 @@
     return { order, nodes };
   }
 
+  const seenNodes = new WeakMap();
   function renderGraph(svg, repo, opts = {}) {
     const { order, nodes } = layoutGraph(repo);
+    const prev = seenNodes.get(svg) || null; const prevRepo = svg.__repo;
+    const newSet = new Set(); if (prev && prevRepo === repo) for (const h of order) if (!prev.has(h)) newSet.add(h);
+    seenNodes.set(svg, new Set(order)); svg.__repo = repo;
     const X0 = 22, DX = 24, Y0 = 22, DY = opts.compact ? 26 : 34;
     const maxCol = Math.max(0, ...[...nodes.values()].map(n => n.col));
     const labelX = X0 + (maxCol + 1) * DX + 8;
@@ -97,7 +129,7 @@
       const isHead = n.hash === head;
       const merge = n.parents.length > 1;
       out += `<g class="g-node" data-hash="${n.hash}">`;
-      out += `<circle cx="${x}" cy="${y}" r="${merge ? 6.5 : 5.5}" fill="${merge ? '#11151c' : color}" stroke="${isHead ? '#fff' : color}" stroke-width="${isHead ? 3 : 2}"/>`;
+      out += `<circle class="${newSet.has(n.hash) ? 'g-new' : ''}" cx="${x}" cy="${y}" r="${merge ? 6.5 : 5.5}" fill="${merge ? '#11151c' : color}" stroke="${isHead ? '#fff' : color}" stroke-width="${isHead ? 3 : 2}"/>`;
       let lx = labelX;
       const decos = repo.decorations(n.hash);
       let pills = '';
@@ -154,7 +186,8 @@
       else if (h === i && i !== w) { st = '已修改，未暂存'; cls = 'st-modified'; }
       else { st = '已暂存，又改了'; cls = 'st-modified'; }
       const cell = (v, extra) => `<td class="h ${v ? '' : 'none'} ${extra || ''}">${v ? abbrev(v) : '—'}</td>`;
-      return `<tr><td class="file" data-path="${esc(p)}">${esc(p)}</td>${cell(w, w !== i ? 'diff-wi' : '')}${cell(i, i !== h ? 'diff-ih' : '')}${cell(h)}<td class="st ${cls}">${st}</td></tr>`;
+      const idxCell = conflict ? (() => { const c = repo.conflicts.get(p); return `<td class="h conflict" title="冲突时暂存区里有三份：stage1 共同祖先 / stage2 我方 / stage3 对方">1 base ${c.base ? abbrev(c.base) : '—'}<br>2 ours ${c.ours ? abbrev(c.ours) : '—'}<br>3 theirs ${c.theirs ? abbrev(c.theirs) : '—'}</td>`; })() : cell(i, i !== h ? 'diff-ih' : '');
+      return `<tr><td class="file" data-path="${esc(p)}">${esc(p)}</td>${cell(w, w !== i ? 'diff-wi' : '')}${idxCell}${cell(h)}<td class="st ${cls}">${st}</td></tr>`;
     });
     table.querySelector('tbody').innerHTML = rows.join('') || '<tr><td colspan="5" class="muted">（没有文件）</td></tr>';
     table.querySelectorAll('td.file').forEach(td => td.addEventListener('click', () => onEdit(td.dataset.path)));
@@ -174,5 +207,5 @@
     repos.forEach((r, i) => renderGraph(document.getElementById('multi-svg-' + i), r.repo, { compact: true, width: 380 }));
   }
 
-  global.GitUI = { Terminal, renderGraph, layoutGraph, commitDetailHtml, renderTrees, renderMulti, esc, $ };
+  global.GitUI = { Terminal, highlight, renderGraph, layoutGraph, commitDetailHtml, renderTrees, renderMulti, esc, $ };
 })(typeof window !== 'undefined' ? window : globalThis);

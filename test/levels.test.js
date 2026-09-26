@@ -51,11 +51,12 @@ for (const lv of GitLevels.LEVELS) {
   const ctx = { world, state: {}, teammate: (who, lines) => { const cwd = who === '小明' ? '/home/xiaoming/project' : '/home/xiaohong/project'; for (const l of lines) world.runAs(who === '小明' ? 'xiaoming' : 'xiaohong', cwd, l); } };
   lv.setup(ctx);
   world.log = [];
+  { const pre = lv.tasks.map(t => { try { return !!t.check(ctx); } catch (e) { return false; } }); if (pre.some(Boolean)) { failures++; console.log('FAIL', lv.id, '开局就已满足的任务:', pre.map((v, i) => v ? i + 1 : null).filter(Boolean).join(',')); } }
   const sol = SOLUTIONS[lv.id];
   if (!sol) { console.log('SKIP', lv.id); continue; }
   const repo = () => world.repoAt(GitLevels.PROJ);
   const sticky = lv.tasks.map(() => false);
-  const evalTasks = () => lv.tasks.forEach((t, i) => { if (!sticky[i]) { try { sticky[i] = !!t.check(ctx); } catch (e) { sticky[i] = 'ERR ' + e.message; } } });
+  const evalTasks = () => { lv.tasks.forEach((t, i) => { if (!sticky[i]) { try { sticky[i] = !!t.check(ctx); } catch (e) { sticky[i] = 'ERR ' + e.message; } } }); if (lv.tasks.every((t, i) => t.observe || sticky[i] === true)) lv.tasks.forEach((t, i) => { if (t.observe) sticky[i] = true; }); };
   const run = l => { const r = world.exec(l); if (lv.onCommand) lv.onCommand(ctx, l, r); evalTasks(); return r; };
   for (let step of sol) {
     if (step === '@tree') { const r = repo(); step = 'git cat-file -p ' + r.getCommit(r.headHash()).tree; }
