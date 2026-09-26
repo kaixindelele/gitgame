@@ -31,7 +31,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const clickTaskGlow = async () => { await page.evaluate(() => { const li = document.querySelector('#task-list'); if (li) { li.style.transition = 'box-shadow .3s'; li.style.boxShadow = '0 0 0 3px #5fd38d55'; setTimeout(() => li.style.boxShadow = '', 1500); } }); };
 
   if (mode === 'tutorial') {
-    await card('Git 沙盒学院', '在浏览器里，用真实的 git 逻辑，从“复制文件夹备份”讲起<br>教学视频 · 约 5 分钟', 3500);
+    await card('Git 沙盒学院', '在浏览器里，用真实的 git 逻辑，从“复制文件夹备份”讲起<br>教学视频 · 约 3 分钟', 3500);
     await caption('第 0 章：没有 git 的日子。先用最原始的办法——整个文件夹复制一份。', 2200);
     await type('ls');
     await type('cp -r project project_v1');

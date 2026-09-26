@@ -2,7 +2,7 @@
 
 一个**纯静态、零依赖**的网页游戏：打开 `index.html` 就能玩。它在浏览器里实现了一个遵循真实 git 逻辑的引擎（blob / tree / commit 对象、SHA-1 哈希、暂存区、引用、reflog、三方合并、远程与裸仓库），从最原始的“复制文件夹备份”讲起，一路带你走到分支、冲突、多人协作、数据恢复和 bug 定位。
 
-- 🎬 教学视频：[`media/tutorial.mp4`](media/tutorial.mp4)（约 5 分钟）
+- 🎬 教学视频：[`media/tutorial.mp4`](media/tutorial.mp4)（约 3 分钟）
 - 📣 宣传视频：[`media/promo.mp4`](media/promo.mp4)（约 1 分钟）
 
 ## 像游戏一样玩
