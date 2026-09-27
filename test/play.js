@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 命令行试玩工具：node test/play.js <关卡id> "命令1" "命令2" ...
 // 会打印关卡说明、每条命令的输出、任务完成情况和反馈。加 --list 列出所有关卡。
-require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js'); require('../js/analogy.js'); require('../js/levels.js');
+require('../js/i18n.js'); require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js'); require('../js/analogy.js'); require('../js/levels.js');
 const { LEVELS, CHAPTERS, PROJ } = GitLevels;
 const strip = h => String(h || '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const args = process.argv.slice(2);

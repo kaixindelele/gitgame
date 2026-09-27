@@ -1,5 +1,5 @@
 // 引擎回归测试：用 node 跑一遍典型流程
-require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js');
+require('../js/i18n.js'); require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js');
 let failures = 0;
 function check(name, cond, extra) { if (!cond) { failures++; console.log('FAIL', name, extra || ''); } else console.log('ok  ', name); }
 const w = new GitShell.World();

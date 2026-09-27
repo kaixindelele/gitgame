@@ -1,5 +1,5 @@
 // 对每一关执行 setup，然后按 hints 里的命令（去掉中文说明）自动通关，验证任务判定可达
-require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js'); require('../js/analogy.js'); require('../js/levels.js');
+require('../js/i18n.js'); require('../js/sha1.js'); require('../js/diff.js'); require('../js/git.js'); require('../js/gitcmd.js'); require('../js/shell.js'); require('../js/analogy.js'); require('../js/levels.js');
 const SOLUTIONS = {
   'c0-1': ['cp -r project project_v1', 'echo "// 新功能" >> project/app.js', 'cp -r project project_v2', 'diff -r project_v1 project_v2', 'du -sh *'],
   'c0-2': ['grep -r 8080 .', 'rm -r project && cp -r project_final2 project', 'diff -r project_final project_backup_0103', 'rm -r project_backup_0103'],
