@@ -206,6 +206,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   await h.caption(''); await sleep(800);
   await page.close(); await context.close(); await browser.close(); server.close();
 
+  fs.writeFileSync(path.join(work, 'timeline.json'), JSON.stringify(timeline));
   // ③ 合成音轨并封装
   const ffmpeg = execSync('python3 -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"').toString().trim();
   const webm = path.join(vdir, fs.readdirSync(vdir).find(f => f.endsWith('.webm')));
@@ -213,7 +214,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   timeline.forEach(x => args.push('-i', path.join(work, 'audio', `${x.id}.wav`)));
   const LEAD = 0.35; // 旁白比画面略晚一点开始
   const filters = timeline.map((x, i) => `[${i + 1}:a]adelay=${Math.round((x.t + LEAD) * 1000)}:all=1[a${i}]`);
-  filters.push(`${timeline.map((_, i) => `[a${i}]`).join('')}amix=inputs=${timeline.length}:normalize=0:dropout_transition=0,volume=1.6,aresample=48000[aout]`);
+  filters.push(`${timeline.map((_, i) => `[a${i}]`).join('')}amix=inputs=${timeline.length}:normalize=0:dropout_transition=0,volume=1.2,alimiter=limit=0.89:level=false,aresample=48000[aout]`);
   args.push('-filter_complex', filters.join(';'), '-map', '0:v', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', '-r', '25', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-shortest', outFile);
   execFileSync(ffmpeg, args, { stdio: 'ignore' });
   console.log('wrote', outFile, Math.round(fs.statSync(outFile).size / 1024) + 'KB');
