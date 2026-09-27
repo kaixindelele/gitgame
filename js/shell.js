@@ -4,6 +4,7 @@
   const { Repo, GitError, abbrev, byteLen, unionKeys, parseArgs } = global.GitCore;
   const { runGit, transferObjects, normPath } = global.GitCmd;
   const { unifiedHunks } = global.GitDiff;
+  const T = (zh, en) => (typeof global.T === 'function' ? global.T(zh, en) : zh);
 
   class ShellError extends Error { constructor(m) { super(m); this.name = 'ShellError'; } }
 
@@ -18,14 +19,14 @@
       if (ch === '\\' && i + 1 < line.length) { cur += line[++i]; has = true; continue; }
       if (/\s/.test(ch)) { if (cur || has) { tokens.push(cur); cur = ''; has = false; } continue; }
       if (ch === '>' ) { if (cur || has) { tokens.push(cur); cur = ''; has = false; } if (line[i + 1] === '>') { tokens.push('>>'); i++; } else tokens.push('>'); continue; }
-      if (ch === '|' && line[i + 1] !== '|') throw new ShellError('本沙盒不支持管道 |（可以用 git log -n 3、grep 文件 等替代）');
+      if (ch === '|' && line[i + 1] !== '|') throw new ShellError(T('本沙盒不支持管道 |（可以用 git log -n 3、grep 文件 等替代）', 'Pipes (|) are not supported in this sandbox (try git log -n 3, grep <file>, etc. instead)'));
       if (ch === '$' && /[A-Za-z_]/.test(line[i + 1] || '')) { let j = i + 1, name = ''; while (j < line.length && /[A-Za-z0-9_]/.test(line[j])) name += line[j++]; const env = { HOME: '/home/' + (tokenize.actor || 'you'), USER: tokenize.actor || 'you', PWD: tokenize.cwd || '' }; cur += env[name] !== undefined ? env[name] : ''; has = true; i = j - 1; continue; }
       if (ch === '&' && line[i + 1] === '&') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push('&&'); i++; continue; }
       if (ch === ';') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push(';'); continue; }
       if (ch === '|' && line[i + 1] === '|') { if (cur || has) { tokens.push(cur); cur = ''; has = false; } tokens.push('||'); i++; continue; }
       cur += ch;
     }
-    if (inS || inD) throw new ShellError('语法错误：引号未闭合');
+    if (inS || inD) throw new ShellError(T('语法错误：引号未闭合', 'syntax error: unterminated quoted string'));
     if (cur || has) tokens.push(cur);
     return tokens;
   }
@@ -79,7 +80,7 @@
       const parts = abs.split('/').filter(Boolean);
       let node = this.root;
       for (const p of parts) {
-        if (node.type === 'repo') throw new ShellError('无法在仓库内部创建目录树');
+        if (node.type === 'repo') throw new ShellError(T('无法在仓库内部创建目录树', 'cannot create a directory tree inside a repository'));
         if (!node.children.has(p)) node.children.set(p, { type: 'dir', children: new Map() });
         node = node.children.get(p);
       }
@@ -117,7 +118,7 @@
       if (rel === 'ORIG_HEAD') return r.ORIG_HEAD ? { type: 'file', content: r.ORIG_HEAD + '\n' } : null;
       if (rel === 'description') return { type: 'file', content: "Unnamed repository; edit this file 'description' to name the repository.\n" };
       if (rel === 'config') { const lines = ['[core]', '\trepositoryformatversion = 0', '\tfilemode = true', '\tbare = false']; const groups = {}; for (const [k, v] of Object.entries(r.config)) { const m = k.match(/^([^.]+)\.(.+)\.([^.]+)$/) || k.match(/^([^.]+)\.([^.]+)$/); if (!m) continue; const g = m.length === 4 ? `${m[1]} "${m[2]}"` : m[1]; const key = m.length === 4 ? m[3] : m[2]; (groups[g] = groups[g] || []).push(`\t${key} = ${v}`); } for (const g of Object.keys(groups)) lines.push(`[${g}]`, ...groups[g]); return { type: 'file', content: lines.join('\n') + '\n' }; }
-      if (rel === 'index') return { type: 'file', content: `（二进制文件。暂存区当前登记了 ${r.index.size} 个路径，用 git ls-files -s 查看）\n` };
+      if (rel === 'index') return { type: 'file', content: T(`（二进制文件。暂存区当前登记了 ${r.index.size} 个路径，用 git ls-files -s 查看）\n`, `(binary file. The staging area currently lists ${r.index.size} path${r.index.size === 1 ? '' : 's'}; view them with git ls-files -s)\n`) };
       if (rel === 'refs') return entries(['heads', 'remotes', 'tags'], ['dir', 'dir', 'dir']);
       if (rel === 'refs/heads') return entries(r.branches());
       if (rel === 'refs/tags') return entries(r.tags());
@@ -131,7 +132,7 @@
       if (rel === 'objects') { const dirs = [...new Set([...r.objects.keys()].map(k => k.slice(0, 2)))].sort(); return entries(dirs.concat(['info', 'pack']), dirs.map(() => 'dir').concat(['dir', 'dir'])); }
       if (rel === 'objects/info' || rel === 'objects/pack') return entries([]);
       if (/^objects\/[0-9a-f]{2}$/.test(rel)) { const pre = rel.slice(8); return entries([...r.objects.keys()].filter(k => k.startsWith(pre)).map(k => k.slice(2)).sort()); }
-      if (/^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/.test(rel)) { const h = rel.slice(8, 10) + rel.slice(11); const o = r.objects.get(h); if (!o) return null; return { type: 'file', content: `（zlib 压缩的 ${o.type} 对象，${byteLen(o.content)} 字节。用 git cat-file -p ${h.slice(0, 7)} 查看内容）\n` }; }
+      if (/^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/.test(rel)) { const h = rel.slice(8, 10) + rel.slice(11); const o = r.objects.get(h); if (!o) return null; return { type: 'file', content: T(`（zlib 压缩的 ${o.type} 对象，${byteLen(o.content)} 字节。用 git cat-file -p ${h.slice(0, 7)} 查看内容）\n`, `(zlib-compressed ${o.type} object, ${byteLen(o.content)} bytes. View its contents with git cat-file -p ${h.slice(0, 7)})\n`) }; }
       return null;
     }
 
@@ -146,8 +147,8 @@
     }
     writeFile(abs, content) {
       const l = this.locate(abs);
-      if (l && l.kind === 'gitdir') throw new ShellError('本沙盒里 .git 目录是只读的，请用 git 命令修改它');
-      if (l && l.kind === 'repo') { if (!l.rel) throw new ShellError(`${abs}: Is a directory`); if (l.repo.bare) throw new ShellError('裸仓库没有工作区，不能直接写文件'); if ([...l.repo.workdir.keys()].some(k => k.startsWith(l.rel + '/'))) throw new ShellError(`${abs}: Is a directory`); l.repo.workdir.set(l.rel, content); return; }
+      if (l && l.kind === 'gitdir') throw new ShellError(T('本沙盒里 .git 目录是只读的，请用 git 命令修改它', 'The .git directory is read-only in this sandbox; use git commands to change it'));
+      if (l && l.kind === 'repo') { if (!l.rel) throw new ShellError(`${abs}: Is a directory`); if (l.repo.bare) throw new ShellError(T('裸仓库没有工作区，不能直接写文件', 'A bare repository has no working tree; you cannot write files into it directly')); if ([...l.repo.workdir.keys()].some(k => k.startsWith(l.rel + '/'))) throw new ShellError(`${abs}: Is a directory`); l.repo.workdir.set(l.rel, content); return; }
       if (l && l.kind === 'dir') throw new ShellError(`${abs}: Is a directory`);
       const { parentPath, name } = this.parentOf(abs);
       const pl = this.locate(parentPath);
@@ -178,7 +179,7 @@
     removePath(abs, { recursive = false } = {}) {
       const l = this.locate(abs);
       if (!l) throw new ShellError(`rm: cannot remove '${abs}': No such file or directory`);
-      if (l.kind === 'gitdir') throw new ShellError('本沙盒里 .git 内部是只读的（rm -rf .git 可以删除整个仓库历史）');
+      if (l.kind === 'gitdir') throw new ShellError(T('本沙盒里 .git 内部是只读的（rm -rf .git 可以删除整个仓库历史）', 'The inside of .git is read-only in this sandbox (rm -rf .git deletes the whole repository history)'));
       if (l.kind === 'repo') {
         if (!l.rel) { if (!recursive) throw new ShellError(`rm: cannot remove '${abs}': Is a directory`); const { parentPath, name } = this.parentOf(abs); this.locate(parentPath).node.children.delete(name); return; }
         if (l.repo.workdir.has(l.rel)) { l.repo.workdir.delete(l.rel); return; }
@@ -225,7 +226,7 @@
       const pl = this.locate(parentPath);
       if (!pl) throw new ShellError(`cp: cannot create directory '${target}': No such file or directory`);
       if (l.kind === 'repo' && !l.rel) {
-        if (pl.kind !== 'dir') throw new ShellError('cp: 仓库只能复制到普通目录下');
+        if (pl.kind !== 'dir') throw new ShellError(T('cp: 仓库只能复制到普通目录下', 'cp: a repository can only be copied into a plain directory'));
         const r = l.repo.clone(); r.path = target; r.globalConfig = this.globalConfigFor(target);
         pl.node.children.set(name, { type: 'repo', repo: r }); return;
       }
@@ -294,7 +295,7 @@
       } catch (e) {
         if (e instanceof GitError || e instanceof ShellError) return { ok: false, err: e.message, gitError: e instanceof GitError };
         console.error(e);
-        return { ok: false, err: '内部错误: ' + e.message };
+        return { ok: false, err: T('内部错误: ', 'internal error: ') + e.message };
       }
       if (redirect !== null) {
         const abs = this.resolve(redirect);
@@ -312,11 +313,11 @@
       if (h) return h(this, args, opts);
       if (cmd === 'git') return this.runGit(args, opts);
       if (['npm', 'yarn', 'pnpm', 'make', 'pytest', 'python', 'python3', 'node', 'bash', 'sh', 'cargo', 'go', 'mvn'].includes(cmd) || cmd.startsWith('./')) return this.runTests(cmd, args);
-      throw new ShellError(`bash: ${cmd}: command not found（输入 help 查看支持的命令）`);
+      throw new ShellError(T(`bash: ${cmd}: command not found（输入 help 查看支持的命令）`, `bash: ${cmd}: command not found (type help to see the supported commands)`));
     }
     runTests(cmd, args) {
       const l = this.currentRepo();
-      if (!this.testRunner) throw new ShellError(`${cmd}: 本关没有定义测试命令。`);
+      if (!this.testRunner) throw new ShellError(T(`${cmd}: 本关没有定义测试命令。`, `${cmd}: this level defines no test command.`));
       const r = this.testRunner(l ? l.repo : null, this, cmd, args);
       if (typeof r === 'string') return r;
       return { out: r.out, ok: r.ok !== false };
@@ -326,6 +327,7 @@
       if (args[0] === 'clone') return shellCommands.__gitclone(this, args.slice(1));
       if (args[0] === '--version' || args[0] === 'version') return 'git version 2.45.0 (gitgame sandbox)';
       if (args[0] === '--help' || args[0] === 'help') args = ['help'];
+      if (!args.length || args[0] === 'help') return global.GitCmd.commands.help({}, []); // 和真实 git 一样，仓库外也能看帮助
       const l = this.currentRepo();
       if (!l) {
         if (args[0] === 'config' && args.includes('--global')) { const r = new Repo({ path: this.cwd, globalConfig: this.globalConfigFor(this.cwd) }); return runGit({ repo: r, world: this, cwdRel: '' }, args); }
@@ -371,7 +373,7 @@
       let entries; try { entries = w.listDir(path, { all: flags.a }); } catch (e) { return; }
       entries.forEach((e, i) => {
         const last = i === entries.length - 1;
-        lines.push(`${prefix}${last ? '└── ' : '├── '}${e.name}${e.type === 'dir' ? '/' : ''}${e.repo ? '  (git 仓库)' : ''}`);
+        lines.push(`${prefix}${last ? '└── ' : '├── '}${e.name}${e.type === 'dir' ? '/' : ''}${e.repo ? T('  (git 仓库)', '  (git repository)') : ''}`);
         if (e.type === 'dir' && !e.git && !(flags.L && depth + 1 >= parseInt(flags.L, 10))) walk(path + '/' + e.name, prefix + (last ? '    ' : '│   '), depth + 1);
       });
     };
@@ -379,7 +381,7 @@
     return lines.join('\n');
   };
   shellCommands.cat = (w, args) => {
-    if (!args.length) throw new ShellError('cat: 请指定文件');
+    if (!args.length) throw new ShellError(T('cat: 请指定文件', 'cat: missing file operand'));
     const outs = [];
     for (const a of args) { const abs = w.resolve(a); if (w.isDir(abs)) throw new ShellError(`cat: ${a}: Is a directory`); const c = w.readFile(abs); if (c === null) throw new ShellError(`cat: ${a}: No such file or directory`); outs.push(c.replace(/\n$/, '')); }
     return outs.join('\n');
@@ -398,7 +400,7 @@
       const { parentPath, name } = w.parentOf(abs);
       const pl = w.locate(parentPath);
       if (!pl) { if (flags.p) { w.mkdirp(abs); continue; } throw new ShellError(`mkdir: cannot create directory '${a}': No such file or directory`); }
-      if (pl.kind === 'repo') { /* git 不跟踪空目录，放一个占位说明 */ return `（提示：git 不会记录空目录。目录会在你往里放文件时自动出现，例如 echo hi > ${a}/file.txt）`; }
+      if (pl.kind === 'repo') { /* git 不跟踪空目录，放一个占位说明 */ return T(`（提示：git 不会记录空目录。目录会在你往里放文件时自动出现，例如 echo hi > ${a}/file.txt）`, `(note: git does not track empty directories. The directory appears automatically once you put a file in it, e.g. echo hi > ${a}/file.txt)`); }
       if (pl.kind !== 'dir') throw new ShellError(`mkdir: cannot create directory '${a}': Not a directory`);
       pl.node.children.set(name, { type: 'dir', children: new Map() });
     }
@@ -409,7 +411,7 @@
     if (!positional.length) throw new ShellError('rm: missing operand');
     for (const a of positional) {
       const abs = w.resolve(a);
-      if (abs === w.home || abs === '/') throw new ShellError('rm: 拒绝删除主目录');
+      if (abs === w.home || abs === '/') throw new ShellError(T('rm: 拒绝删除主目录', 'rm: refusing to remove the home directory'));
       if (abs.endsWith('/.git')) {
         const l = w.locate(abs.slice(0, -5));
         if (l && l.kind === 'repo' && !l.rel) { if (!(flags.r || flags.R || flags.rf || flags.fr)) throw new ShellError(`rm: cannot remove '${a}': Is a directory`); const files = new Map(l.repo.workdir); const { parentPath, name } = w.parentOf(abs.slice(0, -5)); const dir = { type: 'dir', children: new Map() }; w.locate(parentPath).node.children.set(name, dir); for (const [k, v] of files) { const parts = k.split('/'); let n = dir; for (let i = 0; i < parts.length - 1; i++) { if (!n.children.has(parts[i])) n.children.set(parts[i], { type: 'dir', children: new Map() }); n = n.children.get(parts[i]); } n.children.set(parts[parts.length - 1], { type: 'file', content: v }); } w.lastEvent = { type: 'git-dir-deleted', path: abs }; continue; }
@@ -442,7 +444,7 @@
     let targets = positional.length ? positional : ['.'];
     const expanded = [];
     for (const t of targets) { if (t === '*') { for (const e of w.listDir(w.cwd)) expanded.push(e.name); } else expanded.push(t); }
-    return expanded.map(t => { const abs = w.resolve(t); if (!w.exists(abs)) throw new ShellError(`du: cannot access '${t}': No such file or directory`); const l = w.locate(abs); const size = w.sizeOf(abs); const extra = (l && l.kind === 'repo' && !l.rel) ? `   （其中 .git 对象库 ${human(w.gitSize(l.repo))}，${l.repo.objects.size} 个对象）` : ''; return `${human(size).padStart(7)}\t${t}${extra}`; }).join('\n');
+    return expanded.map(t => { const abs = w.resolve(t); if (!w.exists(abs)) throw new ShellError(`du: cannot access '${t}': No such file or directory`); const l = w.locate(abs); const size = w.sizeOf(abs); const extra = (l && l.kind === 'repo' && !l.rel) ? T(`   （其中 .git 对象库 ${human(w.gitSize(l.repo))}，${l.repo.objects.size} 个对象）`, `   (of which the .git object store is ${human(w.gitSize(l.repo))}, ${l.repo.objects.size} object${l.repo.objects.size === 1 ? '' : 's'})`) : ''; return `${human(size).padStart(7)}\t${t}${extra}`; }).join('\n');
   };
   shellCommands.diff = (w, args) => {
     const { flags, positional } = parseArgs(args, { r: 'bool', u: 'bool', q: 'bool', N: 'bool' });
@@ -451,7 +453,7 @@
     for (const [p, o] of [[a, positional[0]], [b, positional[1]]]) if (!w.exists(p)) throw new ShellError(`diff: ${o}: No such file or directory`);
     const fa = w.flatFiles(a), fb = w.flatFiles(b);
     if (fa.has('') && fb.has('')) { const h = unifiedHunks(fa.get(''), fb.get('')); if (!h) return ''; return `--- ${positional[0]}\n+++ ${positional[1]}\n${h}`.replace(/\n$/, ''); }
-    if (fa.has('') || fb.has('')) throw new ShellError('diff: 一个是文件，一个是目录');
+    if (fa.has('') || fb.has('')) throw new ShellError(T('diff: 一个是文件，一个是目录', 'diff: one is a file and the other is a directory'));
     const out = [];
     for (const k of unionKeys(fa, fb)) {
       if (!flags.r && k.includes('/')) continue;
@@ -483,7 +485,7 @@
     const { flags, positional } = parseArgs(args, { i: 'bool', e: 'value' });
     const expr = flags.e || positional.shift();
     const m = expr && expr.match(/^s(.)(.*?)\1(.*?)\1([gi]*)$/);
-    if (!m) throw new ShellError('sed: 本沙盒仅支持 s/旧/新/[g] 形式，例如 sed -i "s/foo/bar/g" file.txt');
+    if (!m) throw new ShellError(T('sed: 本沙盒仅支持 s/旧/新/[g] 形式，例如 sed -i "s/foo/bar/g" file.txt', 'sed: this sandbox only supports the s/old/new/[g] form, e.g. sed -i "s/foo/bar/g" file.txt'));
     const re = new RegExp(m[2], m[4]);
     const outs = [];
     for (const f of positional) { const abs = w.resolve(f); const c = w.readFile(abs); if (c === null) throw new ShellError(`sed: can't read ${f}: No such file or directory`); const n = c.replace(re, m[3]); if (flags.i) w.writeFile(abs, n); else outs.push(n.replace(/\n$/, '')); }
@@ -495,22 +497,15 @@
   shellCommands.date = () => new Date(global.GitCore.clock.t + 8 * 3600e3).toUTCString().replace('GMT', '+0800');
   shellCommands.true = () => '';
   shellCommands.false = () => ({ out: '', ok: false });
-  shellCommands.exit = () => '（这是浏览器里的沙盒，没法退出～）';
-  shellCommands.help = () => [
-    '沙盒 shell 支持的命令：',
-    '  文件：ls [-a] [-l]  cat  echo "文本" > 文件  echo "文本" >> 文件  touch  rm [-r]  mv  cp [-r]  mkdir  tree  du -sh  diff [-r]  grep [-n]  sed -i "s/旧/新/g" 文件  head  tail  wc',
-    '  编辑：edit <文件>（也可以用 vim/nano/code，会打开编辑器面板；在右侧“文件”标签里点击文件也能编辑）',
-    '  目录：cd  pwd',
-    '  测试：npm test / make test / pytest（部分关卡提供）',
-    '  git：git help 查看 git 子命令；git <命令> 与真实 git 用法一致',
-    '  其它：clear  history  whoami  date',
-  ].join('\n');
+  shellCommands.exit = () => T('（这是浏览器里的沙盒，没法退出～）', '(this is a sandbox in your browser; there is no exit~)');
+  shellCommands.help = () => T(`沙盒 shell 支持的命令：\n  文件：ls [-a] [-l]  cat  echo "文本" > 文件  echo "文本" >> 文件  touch  rm [-r]  mv  cp [-r]  mkdir  tree  du -sh  diff [-r]  grep [-n]  sed -i "s/旧/新/g" 文件  head  tail  wc\n  编辑：edit <文件>（也可以用 vim/nano/code，会打开编辑器面板；在右侧“文件”标签里点击文件也能编辑）\n  目录：cd  pwd\n  测试：npm test / make test / pytest（部分关卡提供）\n  git：git help 查看 git 子命令；git <命令> 与真实 git 用法一致\n  其它：clear  history  whoami  date`,
+    `Commands supported by the sandbox shell:\n  files:  ls [-a] [-l]  cat  echo "text" > file  echo "text" >> file  touch  rm [-r]  mv  cp [-r]  mkdir  tree  du -sh  diff [-r]  grep [-n]  sed -i "s/old/new/g" file  head  tail  wc\n  edit:   edit <file> (vim/nano/code work too and open the editor panel; you can also click a file in the "Files" tab on the right to edit it)\n  dirs:   cd  pwd\n  tests:  npm test / make test / pytest (available in some levels)\n  git:    git help lists the git subcommands; git <command> works like real git\n  other:  clear  history  whoami  date`);
   for (const ed of ['edit', 'vim', 'vi', 'nano', 'code', 'open']) shellCommands[ed] = (w, args) => {
-    if (!args.length) throw new ShellError(`${ed}: 请指定要编辑的文件`);
+    if (!args.length) throw new ShellError(T(`${ed}: 请指定要编辑的文件`, `${ed}: specify a file to edit`));
     const abs = w.resolve(args[0]);
-    if (w.isDir(abs)) throw new ShellError(`${ed}: ${args[0]} 是目录`);
+    if (w.isDir(abs)) throw new ShellError(T(`${ed}: ${args[0]} 是目录`, `${ed}: ${args[0]} is a directory`));
     const l = w.locate(abs);
-    if (l && l.kind === 'repo' && l.repo.bare) throw new ShellError('裸仓库没有工作区');
+    if (l && l.kind === 'repo' && l.repo.bare) throw new ShellError(T('裸仓库没有工作区', 'A bare repository has no working tree'));
     return { out: '', actions: [{ type: 'edit', path: abs, content: w.readFile(abs) }] };
   };
 
@@ -518,7 +513,7 @@
     const { flags, positional } = parseArgs(args, { bare: 'bool', b: 'value', 'initial-branch': 'value', q: 'bool' });
     const target = w.resolve(positional[0] || '.');
     const l = w.locate(target);
-    if (l && l.kind === 'repo') { if (l.rel) throw new GitError(`fatal: 本沙盒不支持嵌套仓库：${l.repo.path} 已经是一个 git 仓库。\nhint: 如果那是误操作，先 rm -rf ${l.repo.path}/.git 撤销，再到正确的目录执行 git init。`); return `Reinitialized existing Git repository in ${target}/.git/`; }
+    if (l && l.kind === 'repo') { if (l.rel) throw new GitError(T(`fatal: 本沙盒不支持嵌套仓库：${l.repo.path} 已经是一个 git 仓库。\nhint: 如果那是误操作，先 rm -rf ${l.repo.path}/.git 撤销，再到正确的目录执行 git init。`, `fatal: nested repositories are not supported in this sandbox: ${l.repo.path} is already a git repository.\nhint: If that was a mistake, undo it with rm -rf ${l.repo.path}/.git, then run git init in the right directory.`)); return `Reinitialized existing Git repository in ${target}/.git/`; }
     if (l && l.kind === 'file') throw new GitError(`fatal: cannot mkdir ${positional[0]}: File exists`);
     const defaultBranch = flags.b || flags['initial-branch'] || w.globalConfigFor(target)['init.defaultBranch'] || 'main';
     let files = new Map();

@@ -5,7 +5,8 @@
   'use strict';
   function detect() {
     try {
-      if (typeof process !== 'undefined' && process.env && process.env.GITGAME_LANG) return process.env.GITGAME_LANG === 'en' ? 'en' : 'zh';
+      // Node（测试/录制脚本）：默认中文，只认环境变量；Node 22 自带的 navigator.language 不作数
+      if (typeof process !== 'undefined' && process.versions && process.versions.node) return process.env.GITGAME_LANG === 'en' ? 'en' : 'zh';
       if (typeof location !== 'undefined') {
         const q = new URLSearchParams(location.search).get('lang');
         if (q === 'en' || q === 'zh') return q;

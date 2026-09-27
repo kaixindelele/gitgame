@@ -12,7 +12,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  await page.goto('http://localhost:8765/#c1-2');
+  await page.goto('http://localhost:8765/?lang=zh#c1-2');
   await page.waitForSelector('#term-input');
   const type = async (cmd) => { await page.fill('#term-input', cmd); await page.press('#term-input', 'Enter'); await page.waitForTimeout(60); };
   await type('echo "# 项目说明" > README.md');
@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   await page.click('.tab[data-tab="graph"]');
   await page.screenshot({ path: '/tmp/claude-0/-home-user-gitgame/9b71a6b9-7f35-59a3-8136-f02b66bef4c1/scratchpad/shot1.png' });
   // 编辑器 + 冲突关
-  await page.goto('http://localhost:8765/#c4-1');
+  await page.goto('http://localhost:8765/?lang=zh#c4-1');
   await page.waitForTimeout(200);
   await type('git merge feature');
   await type('edit greeting.js');
@@ -42,7 +42,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   await page.waitForTimeout(200);
   console.log('conflict level tasks done:', await page.$$eval('#task-list li.done', els => els.length));
   // 无 -m 的 commit 打开编辑器
-  await page.goto('http://localhost:8765/#c1-3');
+  await page.goto('http://localhost:8765/?lang=zh#c1-3');
   await page.waitForTimeout(200);
   await type('echo "x" > utils.js && git add utils.js');
   await type('git commit');
@@ -53,7 +53,7 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   const termText = await page.$eval('#term-output', el => el.innerText);
   console.log('commit via editor:', /\[main [0-9a-f]{7}\] add utils/.test(termText));
   // 多人标签 + 沙盒按钮
-  await page.goto('http://localhost:8765/#sandbox');
+  await page.goto('http://localhost:8765/?lang=zh#sandbox');
   await page.waitForTimeout(300);
   await page.click('.tab[data-tab="multi"]');
   const btns = await page.$$('#multi-actions button');

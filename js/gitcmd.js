@@ -3,6 +3,7 @@
   'use strict';
   const { Repo, GitError, parseArgs, now, fmtDate, fmtDateISO, abbrev, plural, unionKeys, setEq } = global.GitCore;
   const { unifiedHunks, diffLines, splitLines } = global.GitDiff;
+  const T = (zh, en) => (typeof global.T === 'function' ? global.T(zh, en) : zh);
 
   const pad = (s, n) => String(s).padEnd(n);
   function joinLines(arr) { return arr.filter(x => x !== null && x !== undefined && x !== '').join('\n'); }
@@ -411,7 +412,7 @@
     const repo = ctx.repo;
     const { flags, positional, paths } = parseArgs(args, { A: 'bool', all: 'bool', u: 'bool', update: 'bool', f: 'bool', force: 'bool', p: 'bool', patch: 'bool', n: 'bool', 'dry-run': 'bool', v: 'bool' });
     const specs = positional.concat(paths);
-    if (flags.p || flags.patch) throw new GitError('本沙盒暂不支持交互式 `git add -p`，请直接 `git add <文件>`。');
+    if (flags.p || flags.patch) throw new GitError(T('本沙盒暂不支持交互式 `git add -p`，请直接 `git add <文件>`。', 'Interactive `git add -p` is not supported in this sandbox; use `git add <file>` instead.'));
     if (!specs.length && !(flags.A || flags.all || flags.u || flags.update)) throw new GitError(`Nothing specified, nothing added.\nhint: Maybe you wanted to say 'git add .'?\nhint: Turn this message off by running\nhint: "git config advice.addEmptyPathspec false"`);
     const allCandidates = unionKeys(repo.workdir, repo.index, repo.conflicts);
     const candidates = allCandidates.filter(p => !repo.isIgnored(p));
@@ -511,7 +512,7 @@
       return null;
     })();
     if (seqOut !== null) return seqOut;
-    if (repo.state.rebase) throw new GitError(`fatal: 正在进行 rebase。请解决冲突后使用 git add，再运行 git rebase --continue（或 git rebase --abort 放弃）。`);
+    if (repo.state.rebase) throw new GitError(T(`fatal: 正在进行 rebase。请解决冲突后使用 git add，再运行 git rebase --continue（或 git rebase --abort 放弃）。`, `fatal: A rebase is in progress. Resolve the conflicts, mark them with git add, then run git rebase --continue (or git rebase --abort to give up).`));
     if (repo.conflicts.size) throw new GitError(`error: Committing is not possible because you have unmerged files.\nfatal: Exiting because of an unresolved conflict.`);
     const head = repo.headHash();
     const tree = repo.writeTreeFromFlat(partialTree || repo.index);
@@ -530,12 +531,12 @@
     if (message === undefined) {
       if (ctx.editor) {
         const template = `\n# Please enter the commit message for your changes. Lines starting\n# with '#' will be ignored, and an empty message aborts the commit.\n#\n${statusText(repo).split('\n').map(l => '# ' + l).join('\n')}\n`;
-        ctx.editor({ kind: 'commit-msg', title: 'COMMIT_EDITMSG（写提交信息，保存后即提交）', content: template, onSave: text => {
+        ctx.editor({ kind: 'commit-msg', title: T('COMMIT_EDITMSG（写提交信息，保存后即提交）', 'COMMIT_EDITMSG (write the commit message; saving commits)'), content: template, onSave: text => {
           const msg = text.split('\n').filter(l => !l.startsWith('#')).join('\n').trim();
           if (!msg) return 'Aborting commit due to empty commit message.';
           return ctx.rerun(['commit', ...args, '-m', msg]);
         } });
-        return `hint: 已打开编辑器，请输入提交信息并保存（真实 git 会打开 vim/nano）。`;
+        return T(`hint: 已打开编辑器，请输入提交信息并保存（真实 git 会打开 vim/nano）。`, `hint: Opened the editor. Type your commit message and save (real git would open vim/nano).`);
       }
       throw new GitError('Aborting commit due to empty commit message.');
     }
@@ -627,7 +628,7 @@
     lines.push('');
     if (flags['name-only']) lines.push(changes.map(ch => ch.path).join('\n'));
     else if (flags.stat) lines.push(repo.diffStatText(changes).replace(/\n$/, ''));
-    else if (c.parents.length > 1) lines.push(`(合并提交：以下为与第一父提交 ${abbrev(c.parents[0])} 的差异)\n` + repo.unifiedDiffText(repo.treeOfCommit(c.parents[0]), repo.treeOfCommit(hash)).replace(/\n$/, ''));
+    else if (c.parents.length > 1) lines.push(T(`(合并提交：以下为与第一父提交 ${abbrev(c.parents[0])} 的差异)\n`, `(merge commit: diff against first parent ${abbrev(c.parents[0])})\n`) + repo.unifiedDiffText(repo.treeOfCommit(c.parents[0]), repo.treeOfCommit(hash)).replace(/\n$/, ''));
     else lines.push(repo.unifiedDiffText(repo.treeOfCommit(c.parents[0] || null), repo.treeOfCommit(hash)).replace(/\n$/, ''));
     return lines.join('\n').replace(/\n+$/, '');
   };
@@ -713,8 +714,8 @@
     return warn + note + `HEAD is now at ${abbrev(hash)} ${repo.subject(hash)}`;
   }
   function checkAllowSwitch(repo) {
-    if (repo.state.merge) throw new GitError('fatal: 正在合并中（MERGE_HEAD 存在），请先 git commit 完成合并或 git merge --abort。');
-    if (repo.state.rebase) throw new GitError('fatal: 正在 rebase 中，请先 git rebase --continue 或 git rebase --abort。');
+    if (repo.state.merge) throw new GitError(T('fatal: 正在合并中（MERGE_HEAD 存在），请先 git commit 完成合并或 git merge --abort。', 'fatal: A merge is in progress (MERGE_HEAD exists). Finish it with git commit, or run git merge --abort.'));
+    if (repo.state.rebase) throw new GitError(T('fatal: 正在 rebase 中，请先 git rebase --continue 或 git rebase --abort。', 'fatal: A rebase is in progress. Run git rebase --continue or git rebase --abort first.'));
     if (repo.conflicts.size) throw new GitError(`error: you need to resolve your current index first\n${[...repo.conflicts.keys()].map(p => p + ': needs merge').join('\n')}`);
   }
 
@@ -828,7 +829,7 @@
       repo.logReflog('HEAD', null, start, `checkout: moving from ${from} to ${name}`);
       return out + warn + `Switched to a new branch '${name}'`;
     }
-    if (flags.orphan) throw new GitError('本沙盒暂不支持 --orphan。');
+    if (flags.orphan) throw new GitError(T('本沙盒暂不支持 --orphan。', '--orphan is not supported in this sandbox.'));
     // 路径恢复：git checkout -- <paths> / git checkout <rev> -- <paths>
     const restorePaths = (srcFlat, ps, fromIndex, srcLabel) => {
       const candidates = unionKeys(srcFlat);
@@ -992,7 +993,7 @@
     }
     if (flags.continue) { if (!repo.state.merge) throw new GitError('fatal: There is no merge in progress (MERGE_HEAD missing).'); return commands.commit(ctx, []); }
     if (repo.state.merge) throw new GitError(`fatal: You have not concluded your merge (MERGE_HEAD exists).\nPlease, commit your changes before you merge.`);
-    if (repo.state.rebase) throw new GitError('fatal: 正在 rebase 中，无法合并。');
+    if (repo.state.rebase) throw new GitError(T('fatal: 正在 rebase 中，无法合并。', 'fatal: A rebase is in progress; cannot merge.'));
     if (!positional.length) throw new GitError('fatal: No remote for the current branch.');
     const theirs = repo.resolveRev(positional[0]);
     return doMerge(ctx, theirs, positional[0], { noff: flags['no-ff'], ffOnly: flags['ff-only'], message: flags.m, squash: flags.squash, favor });
@@ -1002,7 +1003,7 @@
   commands.rebase = (ctx, args) => {
     const repo = ctx.repo;
     const { flags, positional } = parseArgs(args, { continue: 'bool', abort: 'bool', skip: 'bool', i: 'bool', interactive: 'bool', onto: 'value', quit: 'bool', 'no-ff': 'bool' });
-    if (flags.i || flags.interactive) throw new GitError('本沙盒暂不支持交互式 rebase（git rebase -i）。可以用 git reset --soft + git commit 来合并提交。');
+    if (flags.i || flags.interactive) throw new GitError(T('本沙盒暂不支持交互式 rebase（git rebase -i）。可以用 git reset --soft + git commit 来合并提交。', 'Interactive rebase (git rebase -i) is not supported in this sandbox. To squash commits, use git reset --soft followed by git commit.'));
     const rb = repo.state.rebase;
     if (flags.abort) {
       if (!rb) throw new GitError('fatal: No rebase in progress?');
@@ -1019,7 +1020,7 @@
       const out = [];
       if (rb.current) {
         const tree = repo.writeTreeFromFlat(repo.index);
-        if (tree === repo.getCommit(repo.headHash()).tree) throw new GitError(`No changes - did you forget to use 'git add'?\nIf there is nothing left to stage, chances are that something else\nalready introduced the same changes; you might want to skip this patch.\n\nhint: 使用 "git rebase --skip" 跳过这个提交。`);
+        if (tree === repo.getCommit(repo.headHash()).tree) throw new GitError(`No changes - did you forget to use 'git add'?\nIf there is nothing left to stage, chances are that something else\nalready introduced the same changes; you might want to skip this patch.\n\n` + T(`hint: 使用 "git rebase --skip" 跳过这个提交。`, `hint: Use "git rebase --skip" to skip this commit.`));
         rebaseCommitCurrent(repo, out);
       }
       return rebaseContinue(repo, out);
@@ -1031,7 +1032,7 @@
       return rebaseContinue(repo, []);
     }
     if (rb) throw new GitError(`fatal: It seems that there is already a rebase in progress.\nIf that is the case, please try\n\tgit rebase (--continue | --abort | --skip)`);
-    if (!positional.length) throw new GitError('fatal: 请指定要 rebase 到的分支，例如 git rebase main');
+    if (!positional.length) throw new GitError(T('fatal: 请指定要 rebase 到的分支，例如 git rebase main', 'fatal: Specify the branch to rebase onto, e.g. git rebase main'));
     checkAllowSwitch(repo);
     const upstream = repo.resolveRev(positional[0]);
     let branch = repo.currentBranch();
@@ -1171,7 +1172,7 @@
     const parseStashRef = s => { if (!s) return 0; const m = s.match(/^stash@\{(\d+)\}$/); if (!m) { const n = parseInt(s, 10); if (!isNaN(n)) return n; throw new GitError(`error: ${s} is not a valid reference`); } return parseInt(m[1], 10); };
     if (sub === 'push' || sub === 'save') {
       if (!head) throw new GitError('fatal: You do not have the initial commit yet');
-      if (repo.conflicts.size) throw new GitError('error: 有未解决的冲突，无法 stash。');
+      if (repo.conflicts.size) throw new GitError(T('error: 有未解决的冲突，无法 stash。', 'error: You have unresolved conflicts; cannot stash.'));
       const s = repo.statusData();
       const includeUntracked = flags.u || flags['include-untracked'] || flags.a || flags.all;
       if (!s.staged.length && !s.unstaged.length && !(includeUntracked && s.untracked.length)) return 'No local changes to save';
@@ -1245,7 +1246,7 @@
     if (!target) throw new GitError('fatal: Failed to resolve \'HEAD\' as a valid ref.');
     const msg = flags.m || flags.message;
     if (flags.a || flags.annotate || msg) {
-      if (!msg) throw new GitError('fatal: 本沙盒请用 -m 指定标签说明，例如 git tag -a v1.0 -m "release"');
+      if (!msg) throw new GitError(T('fatal: 本沙盒请用 -m 指定标签说明，例如 git tag -a v1.0 -m "release"', 'fatal: In this sandbox, give the tag message with -m, e.g. git tag -a v1.0 -m "release"'));
       const nm = repo.getConfig('user.name'), em = repo.getConfig('user.email');
       const ts = now();
       const content = `object ${target}\ntype commit\ntag ${name}\ntagger ${nm} <${em}> ${Math.floor(ts / 1000)} +0800\n\n${msg}\n`;
@@ -1325,7 +1326,7 @@
   }
   function bisectStep(repo) {
     const st = repo.state.bisect;
-    if (!st.bad || !st.good.length) { const need = !st.bad ? 'bad' : 'good'; return `status: waiting for both good and bad commits, ${st.bad ? '1 bad' : '0 bad'} commit${st.good.length ? ', ' + plural(st.good.length, 'good commit') : ''} known\n(请用 git bisect ${need} 标记一个${need === 'bad' ? '有问题' : '正常'}的提交)`; }
+    if (!st.bad || !st.good.length) { const need = !st.bad ? 'bad' : 'good'; return `status: waiting for both good and bad commits, ${st.bad ? '1 bad' : '0 bad'} commit${st.good.length ? ', ' + plural(st.good.length, 'good commit') : ''} known\n` + (need === 'bad' ? T('(请用 git bisect bad 标记一个有问题的提交)', '(use git bisect bad to mark a broken commit)') : T('(请用 git bisect good 标记一个正常的提交)', '(use git bisect good to mark a working commit)')); }
     const cands = bisectCandidates(repo, st);
     if (!cands.length) {
       const h = st.bad;
@@ -1348,8 +1349,8 @@
     const rest = args.slice(1);
     if (!sub) throw new GitError('usage: git bisect [help|start|bad|good|new|old|terms|skip|next|reset|visualize|view|replay|log|run]');
     if (sub === 'start') {
-      if (repo.state.bisect) throw new GitError('fatal: bisect 已在进行中，先 git bisect reset');
-      if (!repo.isClean()) throw new GitError('error: 工作区有未提交的修改，无法开始 bisect。请先提交或 stash。');
+      if (repo.state.bisect) throw new GitError(T('fatal: bisect 已在进行中，先 git bisect reset', 'fatal: A bisect is already in progress; run git bisect reset first'));
+      if (!repo.isClean()) throw new GitError(T('error: 工作区有未提交的修改，无法开始 bisect。请先提交或 stash。', 'error: You have uncommitted changes; cannot start bisect. Commit or stash them first.'));
       repo.state.bisect = { bad: null, good: [], origHead: repo.headHash(), origBranch: repo.currentBranch(), log: ['git bisect start'] };
       let out = '';
       if (rest[0]) { repo.state.bisect.bad = repo.resolveRev(rest[0]); repo.state.bisect.log.push(`git bisect bad ${repo.state.bisect.bad}`); }
@@ -1358,7 +1359,7 @@
       return out;
     }
     const st = repo.state.bisect;
-    if (!st) throw new GitError(`You need to start by "git bisect start"\nDo you want me to do it for you [Y/n]? （请先运行 git bisect start）`);
+    if (!st) throw new GitError(`You need to start by "git bisect start"\nDo you want me to do it for you [Y/n]? ` + T('（请先运行 git bisect start）', '(run git bisect start first)'));
     if (sub === 'bad' || sub === 'good' || sub === 'new' || sub === 'old') {
       if (st.found) return `${st.found} is the first bad commit`;
       const h = rest[0] ? repo.resolveRev(rest[0]) : repo.headHash();
@@ -1381,7 +1382,7 @@
       return `Previous HEAD position was ${abbrev(cur)} ${repo.subject(cur)}\nSwitched to branch '${st.origBranch || abbrev(st.origHead)}'`;
     }
     if (sub === 'log') return st.log.join('\n');
-    if (sub === 'run') throw new GitError('本沙盒暂不支持 git bisect run，请手动运行测试命令后用 git bisect good/bad 标记。');
+    if (sub === 'run') throw new GitError(T('本沙盒暂不支持 git bisect run，请手动运行测试命令后用 git bisect good/bad 标记。', 'git bisect run is not supported in this sandbox. Run the test command yourself, then mark the commit with git bisect good/bad.'));
     throw new GitError(`error: unknown bisect subcommand '${sub}'`);
   };
 
@@ -1427,7 +1428,7 @@
   commands.pull = (ctx, args) => {
     const repo = ctx.repo;
     const { flags, positional } = parseArgs(args, { rebase: 'bool', 'no-rebase': 'bool', 'ff-only': 'bool', ff: 'bool', 'no-ff': 'bool', q: 'bool', v: 'bool', 'no-edit': 'bool', p: 'bool', prune: 'bool', tags: 'bool', autostash: 'bool' });
-    if (repo.state.merge || repo.state.rebase || repo.conflicts.size) throw new GitError('error: 有未完成的合并/变基或未解决的冲突，请先处理。');
+    if (repo.state.merge || repo.state.rebase || repo.conflicts.size) throw new GitError(T('error: 有未完成的合并/变基或未解决的冲突，请先处理。', 'error: You have an unfinished merge/rebase or unresolved conflicts. Deal with them first.'));
     const cur = repo.currentBranch();
     const remoteName = positional[0] || repo.config[`branch.${cur}.remote`] || 'origin';
     const fetchOut = fetchFrom(ctx, remoteName);
@@ -1548,8 +1549,8 @@
       out += `\nerror: failed to push some refs to '${url}'`;
       if (hintKind === 'non-ff') out += `\nhint: Updates were rejected because the tip of your current branch is behind\nhint: its remote counterpart. If you want to integrate the remote changes,\nhint: use 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.`;
       else if (hintKind === 'fetch-first') out += `\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally. This is usually caused by another repository pushing to\nhint: the same ref. If you want to integrate the remote changes, use\nhint: 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.`;
-      else if (hintKind === 'checkedout') out += `\nhint: 远程仓库不是裸仓库（bare），且该分支正被检出。真实 git 默认拒绝这种推送。`;
-      else if (hintKind === 'stale') out += `\nhint: --force-with-lease 发现远程分支已被别人更新（与你本地记录的 origin/x 不一致），为保护他人提交而拒绝。先 git fetch 看看发生了什么。`;
+      else if (hintKind === 'checkedout') out += T(`\nhint: 远程仓库不是裸仓库（bare），且该分支正被检出。真实 git 默认拒绝这种推送。`, `\nhint: The remote is not a bare repository and this branch is checked out there. Real git refuses such pushes by default.`);
+      else if (hintKind === 'stale') out += T(`\nhint: --force-with-lease 发现远程分支已被别人更新（与你本地记录的 origin/x 不一致），为保护他人提交而拒绝。先 git fetch 看看发生了什么。`, `\nhint: --force-with-lease found that someone else updated the remote branch (it no longer matches your local origin/x), so the push was refused to protect their commits. Run git fetch to see what happened.`);
       throw new GitError(out);
     }
     return out;
@@ -1589,7 +1590,7 @@
   commands['count-objects'] = (ctx, args) => { const repo = ctx.repo; const n = repo.objects.size; const size = [...repo.objects.values()].reduce((s, o) => s + global.GitCore.byteLen(o.content), 0); if (args.includes('-v')) return `count: ${n}\nsize: ${Math.ceil(size / 1024)}\nin-pack: 0\npacks: 0\nsize-pack: 0\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0`; return `${n} objects, ${Math.ceil(size / 1024)} kilobytes`; };
   commands['merge-base'] = (ctx, args) => { const { positional } = parseArgs(args, { a: 'bool', 'is-ancestor': 'bool' }); const repo = ctx.repo; const a = repo.resolveRev(positional[0]), b = repo.resolveRev(positional[1]); return repo.mergeBase(a, b) || ''; };
   commands.fsck = (ctx, args) => { const repo = ctx.repo; const reach = repo.reachableCommits(); const dangling = repo.allCommits().filter(c => !reach.has(c.hash)); return dangling.map(c => `dangling commit ${c.hash}`).join('\n'); };
-  commands.gc = (ctx, args) => { const repo = ctx.repo; const { flags } = parseArgs(args, { prune: 'value', aggressive: 'bool' }); if (flags.prune === 'now') { const reach = repo.reachableCommits(); const rl = new Set(); for (const log of repo.reflogs.values()) for (const e of log) { rl.add(e.new); if (e.old) rl.add(e.old); } let removed = 0; for (const c of repo.allCommits()) if (!reach.has(c.hash) && !rl.has(c.hash)) { repo.objects.delete(c.hash); removed++; } return `已清理 ${removed} 个不可达且不在 reflog 中的提交对象。`; } return ''; };
+  commands.gc = (ctx, args) => { const repo = ctx.repo; const { flags } = parseArgs(args, { prune: 'value', aggressive: 'bool' }); if (flags.prune === 'now') { const reach = repo.reachableCommits(); const rl = new Set(); for (const log of repo.reflogs.values()) for (const e of log) { rl.add(e.new); if (e.old) rl.add(e.old); } let removed = 0; for (const c of repo.allCommits()) if (!reach.has(c.hash) && !rl.has(c.hash)) { repo.objects.delete(c.hash); removed++; } return T(`已清理 ${removed} 个不可达且不在 reflog 中的提交对象。`, `Pruned ${removed} unreachable commit object${removed === 1 ? '' : 's'} not referenced by the reflog.`); } return ''; };
   commands.grep = (ctx, args) => { const { flags, positional } = parseArgs(args, { n: 'bool', i: 'bool', l: 'bool' }); const repo = ctx.repo; if (!positional.length) throw new GitError('usage: git grep <pattern> [<path>...]'); const re = new RegExp(positional[0], flags.i ? 'i' : ''); const paths = positional.slice(1).map(p => toRepoPath(ctx, p)); const out = []; for (const p of unionKeys(repo.index, repo.conflicts)) { if (paths.length && !paths.some(x => p === x || p.startsWith(x + '/'))) continue; const c = repo.workdir.get(p); if (c === undefined) continue; splitLines(c).forEach((l, i) => { if (re.test(l)) out.push(flags.l ? p : `${p}${flags.n ? ':' + (i + 1) : ''}:${l}`); }); } return [...new Set(out)].join('\n'); };
   commands.clean = (ctx, args) => {
     const repo = ctx.repo;
@@ -1615,8 +1616,8 @@
   commands.version = () => 'git version 2.45.0 (gitgame sandbox)';
   commands['--version'] = commands.version;
   commands.help = (ctx, args) => {
-    const lines = ['usage: git <command> [<args>]', '', '本沙盒支持的常用命令：', '', '  开始一个工作区', '    clone      克隆仓库到新目录', '    init       创建一个空的 git 仓库', '', '  处理当前的变更', '    add        添加文件到暂存区', '    mv         移动或重命名文件', '    restore    恢复工作区文件', '    rm         删除文件', '', '  查看历史与状态', '    status     显示工作区状态', '    log        显示提交日志', '    diff       显示差异', '    show       显示对象', '    blame      逐行显示最后修改者', '    bisect     二分查找引入 bug 的提交', '    reflog     引用日志（找回"丢失"的提交）', '', '  分支与合并', '    branch     列出/创建/删除分支', '    checkout   切换分支或恢复文件', '    switch     切换分支', '    merge      合并分支', '    rebase     变基', '    cherry-pick 摘取提交', '    revert     用新提交撤销旧提交', '    reset      重置 HEAD/暂存区/工作区', '    stash      暂存未提交的修改', '    tag        标签', '', '  协作', '    remote     管理远程仓库', '    fetch      拉取远程对象和引用', '    pull       fetch + merge/rebase', '    push       推送', '', '  底层（了解原理）', '    cat-file   查看对象内容 (-t / -p)', '    ls-files   查看暂存区', '    ls-tree    查看树对象', '    count-objects, rev-parse, fsck, gc', '', '输入 help 查看 shell 命令。'];
-    return lines.join('\n');
+    return T(`usage: git <command> [<args>]\n\n本沙盒支持的常用命令：\n\n  开始一个工作区\n    clone      克隆仓库到新目录\n    init       创建一个空的 git 仓库\n\n  处理当前的变更\n    add        添加文件到暂存区\n    mv         移动或重命名文件\n    restore    恢复工作区文件\n    rm         删除文件\n\n  查看历史与状态\n    status     显示工作区状态\n    log        显示提交日志\n    diff       显示差异\n    show       显示对象\n    blame      逐行显示最后修改者\n    bisect     二分查找引入 bug 的提交\n    reflog     引用日志（找回"丢失"的提交）\n\n  分支与合并\n    branch     列出/创建/删除分支\n    checkout   切换分支或恢复文件\n    switch     切换分支\n    merge      合并分支\n    rebase     变基\n    cherry-pick 摘取提交\n    revert     用新提交撤销旧提交\n    reset      重置 HEAD/暂存区/工作区\n    stash      暂存未提交的修改\n    tag        标签\n\n  协作\n    remote     管理远程仓库\n    fetch      拉取远程对象和引用\n    pull       fetch + merge/rebase\n    push       推送\n\n  底层（了解原理）\n    cat-file   查看对象内容 (-t / -p)\n    ls-files   查看暂存区\n    ls-tree    查看树对象\n    count-objects, rev-parse, fsck, gc\n\n输入 help 查看 shell 命令。`,
+      `usage: git <command> [<args>]\n\nCommon commands supported in this sandbox:\n\n  start a working area\n    clone      Clone a repository into a new directory\n    init       Create an empty Git repository\n\n  work on the current change\n    add        Add file contents to the staging area\n    mv         Move or rename a file\n    restore    Restore working tree files\n    rm         Remove files\n\n  examine the history and state\n    status     Show the working tree status\n    log        Show commit logs\n    diff       Show changes\n    show       Show objects\n    blame      Show who last modified each line\n    bisect     Binary search for the commit that introduced a bug\n    reflog     Reference logs (recover "lost" commits)\n\n  branch and merge\n    branch     List, create, or delete branches\n    checkout   Switch branches or restore files\n    switch     Switch branches\n    merge      Join two or more histories together\n    rebase     Reapply commits on top of another base\n    cherry-pick Apply the changes of existing commits\n    revert     Undo old commits with new commits\n    reset      Reset HEAD / staging area / working tree\n    stash      Stash away uncommitted changes\n    tag        Tags\n\n  collaborate\n    remote     Manage remote repositories\n    fetch      Download objects and refs from a remote\n    pull       fetch + merge/rebase\n    push       Update remote refs\n\n  low-level (how it works)\n    cat-file   Show object contents (-t / -p)\n    ls-files   Show the staging area\n    ls-tree    Show a tree object\n    count-objects, rev-parse, fsck, gc\n\nType help for shell commands.`);
   };
 
   function runGit(ctx, argv) {
