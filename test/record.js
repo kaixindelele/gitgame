@@ -159,11 +159,11 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
   const vdir = path.join(work, 'raw'); fs.rmSync(vdir, { recursive: true, force: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, recordVideo: { dir: vdir, size: { width: 1280, height: 720 } } });
+  await context.addInitScript(() => { try { localStorage.setItem('gitgame.tour', 'done'); } catch (e) {} });
   const page = await context.newPage();
   const t0 = Date.now();
   await page.goto(`http://localhost:${PORT}/?lang=${LANG}`);
   await page.waitForSelector('#term-input');
-  await page.evaluate(() => { try { localStorage.setItem('gitgame.tour', 'done'); } catch (e) {} });
   await page.addStyleTag({ content: `
     #__cap{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:86%;background:rgba(8,12,20,.9);color:#fff;font:600 19px/1.55 -apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;padding:10px 20px;border-radius:12px;z-index:99999;border:1px solid rgba(255,255,255,.15);box-shadow:0 8px 30px rgba(0,0,0,.5);text-align:center;transition:opacity .25s;pointer-events:none}
     .__spot{outline:3px solid #f5a25d !important;outline-offset:3px;box-shadow:0 0 0 9999px rgba(0,0,0,.35) !important;position:relative;z-index:9000 !important;border-radius:8px;transition:outline .2s}
