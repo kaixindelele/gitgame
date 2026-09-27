@@ -78,9 +78,23 @@ test/engine.test.js   引擎回归测试（node test/engine.test.js）
 test/levels.test.js   每一关按提示自动通关的可解性测试
 test/browser.test.js  Playwright 浏览器冒烟测试
 test/play.js          命令行试玩：node test/play.js c3-2 "git merge feature"
-test/record.js        录制教学/宣传视频（VIDEO_LANG=en 录英文版）
+test/record.js        录制教学/宣传视频
+deploy/server-setup.sh 服务器部署脚本（配合 .github/workflows/server.yml）（VIDEO_LANG=en 录英文版）
 media/                视频（tutorial / promo 的中文版 .mp4 与英文版 .en.mp4）
 ```
+
+## 部署到自己的服务器
+
+`deploy/server-setup.sh` 会在服务器上拉取代码，并用 systemd 常驻一个静态网页服务（80 端口空闲就用 80，否则用 8000）。脚本可以反复运行。
+
+想让每次推送自动部署：在仓库 Settings → Secrets and variables → Actions 里添加两个 Secret：
+
+- `SERVER_SSH`：例如 `ubuntu@1.2.3.4`
+- `SERVER_PASSWORD`：SSH 密码（之后建议改用 SSH key）
+
+之后每次推送到 `claude/git-learning-game-hnytni`，`server` 工作流都会通过 SSH 更新服务器。也可以在 Actions 页面手动运行它，并填入一条要在服务器上执行的命令。没有配置 Secrets 时该工作流会自动跳过。
+
+> 注意：公开仓库的 Actions 日志任何人都能看到。Secrets 会被自动打码，但命令的输出不会。
 
 ## 测试
 

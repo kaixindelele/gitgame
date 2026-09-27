@@ -82,6 +82,19 @@ test/record.js        records the tutorial / promo videos (VIDEO_LANG=en records
 media/                videos (tutorial / promo: Chinese .mp4 and English .en.mp4)
 ```
 
+## Deploy to your own server
+
+`deploy/server-setup.sh` pulls the code on the server and keeps a static web server running under systemd (port 80 if free, otherwise 8000). It is safe to run repeatedly.
+
+To deploy automatically on every push, add two secrets under the repo's Settings → Secrets and variables → Actions:
+
+- `SERVER_SSH`: e.g. `ubuntu@1.2.3.4`
+- `SERVER_PASSWORD`: the SSH password (switching to an SSH key later is recommended)
+
+Every push to `claude/git-learning-game-hnytni` then updates the server over SSH via the `server` workflow. You can also run it manually from the Actions page and pass a command to execute on the server. Without the secrets, the workflow skips itself.
+
+> Note: Actions logs of a public repository are visible to everyone. Secrets are masked, but command output is not.
+
 ## Tests
 
 ```bash

@@ -1,0 +1,51 @@
+# 用 GitHub Actions 通过 SSH 部署/管理你自己的服务器。
+# Deploy to / manage your own server over SSH from GitHub Actions.
+#
+# 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
+#   SERVER_SSH       例如 ubuntu@1.2.3.4
+#   SERVER_PASSWORD  SSH 密码（之后建议改用 SSH key）
+# 没有配置 Secrets 时本工作流会直接跳过，不会报错。
+#
+# 注意：公开仓库的 Actions 日志任何人可见。Secrets 会被自动打码，但命令输出不会。
+name: server
+
+on:
+  push:
+    branches: [claude/git-learning-game-hnytni]
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "留空 = 部署/更新；否则在服务器上执行这条命令 / empty = deploy; otherwise run this command on the server"
+        required: false
+        default: ""
+
+concurrency: server
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_SSH: ${{ secrets.SERVER_SSH }}
+      SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+      CMD: ${{ github.event.inputs.command }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check secrets / 检查 Secrets
+        id: check
+        run: |
+          if [ -z "$SERVER_SSH" ] || [ -z "$SSHPASS" ]; then
+            echo "SERVER_SSH / SERVER_PASSWORD 未配置，跳过。Secrets not configured, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install sshpass
+        if: steps.check.outputs.skip != 'true'
+        run: sudo apt-get install -y -qq sshpass >/dev/null
+      - name: Deploy or run command / 部署或执行命令
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o ServerAliveInterval=15 $SERVER_SSH"
+          if [ -z "$CMD" ]; then
+            $SSH 'bash -s' < deploy/server-setup.sh
+          else
+            $SSH "$CMD"
+          fi
