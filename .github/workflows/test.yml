@@ -21,3 +21,5 @@ jobs:
         run: node test/engine.test.js
       - name: Every level is solvable / 每一关都可通关
         run: node test/levels.test.js
+      - name: Curriculum is complete / 教学叙事完整
+        run: node test/curriculum.test.js
