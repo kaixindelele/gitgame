@@ -24,7 +24,7 @@
     t(zh, en) { return I18N.lang === 'en' && en !== undefined ? en : zh; },
     set(lang) {
       try { localStorage.setItem('gitgame.lang', lang); } catch (e) { }
-      try { const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.toString()); } catch (e) { location.reload(); }
+      try { const u = new URL(location.href); u.searchParams.delete('lang'); const next = u.toString(); if (next === location.href) location.reload(); else location.replace(next); } catch (e) { location.reload(); }
     },
     /* 把带 data-en 属性的静态 HTML 元素切成英文（data-en-title / data-en-placeholder 同理） */
     applyStatic(root) {

@@ -108,7 +108,7 @@
     svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
     const xy = n => [X0 + n.col * DX, Y0 + n.row * DY];
     let out = '';
-    if (!order.length) { svg.innerHTML = `<text x="12" y="24" class="g-label" fill="#8b95a7">（还没有提交）</text>`; return; }
+    if (!order.length) { svg.innerHTML = `<text x="12" y="24" class="g-label" fill="#8b95a7">${T('（还没有提交）', '(no commits yet)')}</text>`; return; }
     // 边
     for (const n of nodes.values()) {
       const [x1, y1] = xy(n);
@@ -156,53 +156,53 @@
     const pt = repo.treeOfCommit(c.parents[0] || null);
     const t = repo.treeOfCommit(hash);
     const changes = repo.diffTrees(pt, t);
-    const files = [...t.keys()].sort().map(p => { const ch = changes.find(x => x.path === p); const cls = ch ? (ch.status === 'A' ? 'st-staged' : 'st-modified') : 'st-clean'; return `<span class="${cls}" title="${ch ? (ch.status === 'A' ? '本次新增' : '本次修改') : '与父提交相同（共享 blob）'}">${ch ? (ch.status === 'A' ? '+' : '~') : '='} ${esc(p)}</span>`; }).join('');
+    const files = [...t.keys()].sort().map(p => { const ch = changes.find(x => x.path === p); const cls = ch ? (ch.status === 'A' ? 'st-staged' : 'st-modified') : 'st-clean'; return `<span class="${cls}" title="${ch ? (ch.status === 'A' ? T('本次新增', 'added in this commit') : T('本次修改', 'modified in this commit')) : T('与父提交相同（共享 blob）', 'same as the parent (shared blob)')}">${ch ? (ch.status === 'A' ? '+' : '~') : '='} ${esc(p)}</span>`; }).join('');
     const del = changes.filter(x => x.status === 'D').map(x => `<span class="st-deleted">− ${esc(x.path)}</span>`).join('');
-    return `<div><b>commit</b> <code>${hash}</code></div><div><b>parent</b> ${c.parents.length ? c.parents.map(p => `<code>${abbrev(p)}</code>`).join(' ') : '（根提交）'} · <b>tree</b> <code>${abbrev(c.tree)}</code></div><div><b>author</b> ${esc(c.author.name)} · ${global.GitCore.fmtDate(c.authorDate)}</div><div style="margin:4px 0"><b>message</b> ${esc(c.message.trim())}</div><div class="files"><b>快照内容</b>（= 新增，~ 修改，= 相同）<br>${files}${del}</div>${changes.length && c.parents.length < 2 ? `<pre>${esc(repo.unifiedDiffText(pt, t)).slice(0, 3000)}</pre>` : ''}`;
+    return `<div><b>commit</b> <code>${hash}</code></div><div><b>parent</b> ${c.parents.length ? c.parents.map(p => `<code>${abbrev(p)}</code>`).join(' ') : T('（根提交）', '(root commit)')} · <b>tree</b> <code>${abbrev(c.tree)}</code></div><div><b>author</b> ${esc(c.author.name)} · ${global.GitCore.fmtDate(c.authorDate)}</div><div style="margin:4px 0"><b>message</b> ${esc(c.message.trim())}</div><div class="files">${T('<b>快照内容</b>（+ 新增，~ 修改，= 相同）', '<b>Snapshot contents</b> (+ added, ~ modified, = unchanged)')}<br>${files}${del}</div>${changes.length && c.parents.length < 2 ? `<pre>${esc(repo.unifiedDiffText(pt, t)).slice(0, 3000)}</pre>` : ''}`;
   }
 
   /* ---------- 三棵树 ---------- */
   function renderTrees(repo, container, table, onEdit) {
-    if (!repo) { container.innerHTML = '<span class="muted">当前目录不是 git 仓库。</span>'; table.querySelector('tbody').innerHTML = ''; return; }
-    if (repo.bare) { container.innerHTML = '<span class="muted">这是一个裸仓库（服务器端），没有工作区和暂存区，只有 .git 的内容。</span>'; table.querySelector('tbody').innerHTML = ''; return; }
+    if (!repo) { container.innerHTML = `<span class="muted">${T('当前目录不是 git 仓库。', 'The current directory is not a git repository.')}</span>`; table.querySelector('tbody').innerHTML = ''; return; }
+    if (repo.bare) { container.innerHTML = `<span class="muted">${T('这是一个裸仓库（服务器端），没有工作区和暂存区，只有 .git 的内容。', 'This is a bare repository (server side): no working tree and no staging area, just what would be inside .git.')}</span>`; table.querySelector('tbody').innerHTML = ''; return; }
     const head = repo.headHash();
     const headTree = repo.treeOfCommit(head);
     const branch = repo.currentBranch();
     const states = [];
     if (repo.state.merge) states.push('MERGING'); if (repo.state.rebase) states.push('REBASING'); if (repo.state.cherryPick) states.push('CHERRY-PICKING'); if (repo.state.revert) states.push('REVERTING'); if (repo.state.bisect) states.push('BISECTING');
-    container.innerHTML = `<span class="kv"><b>HEAD</b> → ${branch ? `refs/heads/<b>${esc(branch)}</b>` : '<span class="st-modified">detached</span>'} → ${head ? `<code>${abbrev(head)}</code> ${esc(repo.subject(head))}` : '<span class="muted">（无提交）</span>'}</span>` + (states.length ? `<span class="kv state">${states.join(' ')}</span>` : '') + (repo.stash.length ? `<span class="kv">stash: ${repo.stash.length}</span>` : '') + (repo.currentBranch() && repo.upstreamOf(repo.currentBranch()) ? `<span class="kv muted">upstream: ${esc(repo.upstreamOf(repo.currentBranch()).name)}</span>` : '');
+    container.innerHTML = `<span class="kv"><b>HEAD</b> → ${branch ? `refs/heads/<b>${esc(branch)}</b>` : '<span class="st-modified">detached</span>'} → ${head ? `<code>${abbrev(head)}</code> ${esc(repo.subject(head))}` : `<span class="muted">${T('（无提交）', '(no commits)')}</span>`}</span>` + (states.length ? `<span class="kv state">${states.join(' ')}</span>` : '') + (repo.stash.length ? `<span class="kv">stash: ${repo.stash.length}</span>` : '') + (repo.currentBranch() && repo.upstreamOf(repo.currentBranch()) ? `<span class="kv muted">upstream: ${esc(repo.upstreamOf(repo.currentBranch()).name)}</span>` : '');
     const paths = global.GitCore.unionKeys(headTree, repo.index, repo.workdir, repo.conflicts);
     const rows = paths.map(p => {
       const h = headTree.get(p), i = repo.index.get(p), w = repo.workHash(p);
       const conflict = repo.conflicts.has(p);
       let st, cls;
-      if (conflict) { st = '冲突（未解决）'; cls = 'st-conflict'; }
-      else if (i === undefined && h === undefined) { st = repo.isIgnored(p) ? '已忽略' : '未跟踪'; cls = 'st-untracked'; }
-      else if (h === undefined && i !== undefined) { st = w === i ? '新文件，已暂存' : w === null ? '已暂存，工作区被删' : '已暂存，又改了'; cls = 'st-staged'; }
-      else if (i === undefined) { st = '删除，已暂存'; cls = 'st-deleted'; }
-      else if (w === null) { st = '工作区已删除（未暂存）'; cls = 'st-deleted'; }
-      else if (h === i && i === w) { st = '干净'; cls = 'st-clean'; }
-      else if (h !== i && i === w) { st = '已暂存'; cls = 'st-staged'; }
-      else if (h === i && i !== w) { st = '已修改，未暂存'; cls = 'st-modified'; }
-      else { st = '已暂存，又改了'; cls = 'st-modified'; }
+      if (conflict) { st = T('冲突（未解决）', 'conflict (unresolved)'); cls = 'st-conflict'; }
+      else if (i === undefined && h === undefined) { st = repo.isIgnored(p) ? T('已忽略', 'ignored') : T('未跟踪', 'untracked'); cls = 'st-untracked'; }
+      else if (h === undefined && i !== undefined) { st = w === i ? T('新文件，已暂存', 'new file, staged') : w === null ? T('已暂存，工作区被删', 'staged, deleted in working tree') : T('已暂存，又改了', 'staged, then modified again'); cls = 'st-staged'; }
+      else if (i === undefined) { st = T('删除，已暂存', 'deleted, staged'); cls = 'st-deleted'; }
+      else if (w === null) { st = T('工作区已删除（未暂存）', 'deleted in working tree (not staged)'); cls = 'st-deleted'; }
+      else if (h === i && i === w) { st = T('干净', 'clean'); cls = 'st-clean'; }
+      else if (h !== i && i === w) { st = T('已暂存', 'staged'); cls = 'st-staged'; }
+      else if (h === i && i !== w) { st = T('已修改，未暂存', 'modified, not staged'); cls = 'st-modified'; }
+      else { st = T('已暂存，又改了', 'staged, then modified again'); cls = 'st-modified'; }
       const cell = (v, extra) => `<td class="h ${v ? '' : 'none'} ${extra || ''}">${v ? abbrev(v) : '—'}</td>`;
-      const idxCell = conflict ? (() => { const c = repo.conflicts.get(p); return `<td class="h conflict" title="冲突时暂存区里有三份：stage1 共同祖先 / stage2 我方 / stage3 对方">1 base ${c.base ? abbrev(c.base) : '—'}<br>2 ours ${c.ours ? abbrev(c.ours) : '—'}<br>3 theirs ${c.theirs ? abbrev(c.theirs) : '—'}</td>`; })() : cell(i, i !== h ? 'diff-ih' : '');
+      const idxCell = conflict ? (() => { const c = repo.conflicts.get(p); return `<td class="h conflict" title="${T('冲突时暂存区里有三份：stage1 共同祖先 / stage2 我方 / stage3 对方', 'During a conflict the index holds three versions: stage 1 common ancestor / stage 2 ours / stage 3 theirs')}">1 base ${c.base ? abbrev(c.base) : '—'}<br>2 ours ${c.ours ? abbrev(c.ours) : '—'}<br>3 theirs ${c.theirs ? abbrev(c.theirs) : '—'}</td>`; })() : cell(i, i !== h ? 'diff-ih' : '');
       return `<tr><td class="file" data-path="${esc(p)}">${esc(p)}</td>${cell(w, w !== i ? 'diff-wi' : '')}${idxCell}${cell(h)}<td class="st ${cls}">${st}</td></tr>`;
     });
-    table.querySelector('tbody').innerHTML = rows.join('') || '<tr><td colspan="5" class="muted">（没有文件）</td></tr>';
+    table.querySelector('tbody').innerHTML = rows.join('') || `<tr><td colspan="5" class="muted">${T('（没有文件）', '(no files)')}</td></tr>`;
     table.querySelectorAll('td.file').forEach(td => td.addEventListener('click', () => onEdit(td.dataset.path)));
   }
 
   /* ---------- 多仓库 ---------- */
   function renderMulti(world, container, currentRepo) {
     const repos = world.allRepos();
-    const nameOf = p => p.startsWith('/home/you') ? '👤 你的仓库' : p.startsWith('/home/xiaoming') ? '🧑‍💻 小明的仓库' : p.startsWith('/home/xiaohong') ? '👩‍💻 小红的仓库' : p.startsWith('/srv') ? '☁️ 服务器（origin，裸仓库）' : '📁 ' + p;
+    const nameOf = p => p.startsWith('/home/you') ? T('👤 你的仓库', '👤 Your repo') : p.startsWith('/home/xiaoming') ? T('🧑‍💻 小明的仓库', '🧑‍💻 Xiaoming\'s repo') : p.startsWith('/home/xiaohong') ? T('👩‍💻 小红的仓库', '👩‍💻 Xiaohong\'s repo') : p.startsWith('/srv') ? T('☁️ 服务器（origin，裸仓库）', '☁️ Server (origin, bare)') : '📁 ' + p;
     const orderKey = p => p.startsWith('/home/you') ? 0 : p.startsWith('/srv') ? 1 : 2;
     repos.sort((a, b) => orderKey(a.path) - orderKey(b.path) || a.path.localeCompare(b.path));
-    if (!repos.length) { container.innerHTML = '<p class="muted">还没有任何 git 仓库。</p>'; return; }
+    if (!repos.length) { container.innerHTML = `<p class="muted">${T('还没有任何 git 仓库。', 'No git repositories yet.')}</p>`; return; }
     container.innerHTML = repos.map((r, i) => {
       const refs = [...r.repo.refs].sort().map(([ref, h]) => `<div>${esc(ref.replace('refs/heads/', '').replace('refs/remotes/', '').replace('refs/tags/', 'tag '))}${r.repo.HEAD.symbolic === ref ? ' ←HEAD' : ''} → ${abbrev(r.repo.peel(h))} ${esc(r.repo.subject(r.repo.peel(h)))}</div>`).join('');
-      return `<div class="repo-card ${r.repo === currentRepo ? 'current' : ''}"><h4><span>${nameOf(r.path)}</span><span class="path">${esc(r.path)}</span></h4><div class="refs">${refs || '<span class="muted">（空仓库）</span>'}</div><svg id="multi-svg-${i}" xmlns="http://www.w3.org/2000/svg"></svg></div>`;
+      return `<div class="repo-card ${r.repo === currentRepo ? 'current' : ''}"><h4><span>${nameOf(r.path)}</span><span class="path">${esc(r.path)}</span></h4><div class="refs">${refs || `<span class="muted">${T('（空仓库）', '(empty repository)')}</span>`}</div><svg id="multi-svg-${i}" xmlns="http://www.w3.org/2000/svg"></svg></div>`;
     }).join('');
     repos.forEach((r, i) => renderGraph(document.getElementById('multi-svg-' + i), r.repo, { compact: true, width: 380 }));
   }
