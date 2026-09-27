@@ -1,162 +1,220 @@
-// 录制教学视频 / 宣传视频：node test/record.js tutorial|promo
-// 用 Playwright 驱动页面、注入字幕层，录制为 webm，再用 ffmpeg 转成 mp4。
-// 英文版：VIDEO_LANG=en node test/record.js tutorial|promo → media/tutorial.en.mp4 / media/promo.en.mp4
-const path = require('path'); const fs = require('fs'); const http = require('http'); const { execFileSync } = require('child_process');
+// 录制带配音的教学视频 / 宣传视频（中英文）。
+// 用法: VIDEO_LANG=zh|en node test/record.js tutorial|promo
+// 依赖: Playwright + Chromium、ffmpeg（imageio-ffmpeg 自带）、tools/tts_batch.py（sherpa-onnx + Kokoro 离线语音）
+// 流程: ① 每个镜头的旁白先合成语音，得到时长 ② 录屏，每个镜头停留到旁白念完，字幕同步 ③ 把语音按镜头起点混进视频
+const path = require('path'); const fs = require('fs'); const http = require('http'); const { execFileSync, execSync } = require('child_process');
 const { chromium } = require('/tmp/pw/node_modules/playwright');
-const mode = process.argv[2] || 'tutorial';
-const EN = process.env.VIDEO_LANG === 'en';
-const L = (zh, en) => (EN ? en : zh);
+const LANG = process.env.VIDEO_LANG === 'en' ? 'en' : 'zh';
+process.env.GITGAME_LANG = LANG;
+const L = (zh, en) => (LANG === 'en' ? en : zh);
+const MODE = process.argv[2] || 'tutorial';
 const root = path.resolve(__dirname, '..');
-const outDir = path.join(root, 'media'); fs.mkdirSync(outDir, { recursive: true });
-const tmpDir = path.join(process.env.SCRATCH || '/tmp', 'gitgame-video-' + mode + (EN ? '-en' : '')); fs.rmSync(tmpDir, { recursive: true, force: true }); fs.mkdirSync(tmpDir, { recursive: true });
+const SCRATCH = process.env.SCRATCH || '/tmp';
+const work = path.join(SCRATCH, `video-${MODE}-${LANG}`); fs.mkdirSync(work, { recursive: true });
+const outFile = path.join(root, 'media', `${MODE}${LANG === 'en' ? '.en' : ''}.mp4`);
+
+// 旁白直接取自教学叙事，保证视频和游戏里说的一致
+require('../js/i18n.js'); ['sha1', 'diff', 'git', 'gitcmd', 'shell', 'analogy', 'levels', 'curriculum'].forEach(m => require(`../js/${m}.js`));
+const C = globalThis.GitCurriculum;
+const lv = id => C.levels[id];
+const join = arr => arr.join(L('；', '; '));
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const TYPE_DELAY = 70; // 打字速度（毫秒/字），放慢以便观众跟上
+
+/* ---------- 镜头脚本 ---------- */
+const SCENES = { tutorial: [], promo: [] };
+const S = (mode, say, run, extra = {}) => SCENES[mode].push({ say, run, ...extra });
+
+// ===== 教学视频 =====
+S('tutorial', L('欢迎来到 Git 沙盒学院。这是一个在浏览器里学 git 的游戏。它不从命令讲起，而是从你真实会遇到的问题讲起。',
+  'Welcome to Git Sandbox Academy, a game for learning git right in your browser. Instead of starting from commands, it starts from the problems you will actually run into.'),
+  async h => { await h.card(L('Git 沙盒学院', 'Git Sandbox Academy'), L('从“复制文件夹”到多人协作<br>教学视频', 'From copying folders to teamwork<br>Tutorial')); });
+S('tutorial', L('打开游戏，首先看到的是整个旅程。一共九个阶段：从一个人给项目存档，到后悔药、同时做几件事、合并冲突、多人协作、事故恢复，最后是追查 bug。',
+  'When you open the game, you first see the whole journey: nine stages, from saving your own work, to undoing mistakes, doing several things at once, merge conflicts, teamwork, accidents, and finally hunting bugs.'),
+  async h => { await h.spot('.jv-road', 2500); await h.scroll('#journey', 900, 5000); });
+S('tutorial', L('每个阶段都写清楚了：你会遇到什么问题，没有 git 的时候人们会怎么凑合，git 又怎么解决，以及这一阶段你可能会经历什么，比如报错、冲突、被拒绝。',
+  'Each stage spells out the problem you will meet, how people muddle through without git, how git solves it, and what you may run into along the way, such as errors, conflicts or rejected pushes.'),
+  async h => { await h.scroll('#journey', 0, 1200); await h.spot('.jv-card', 6000); });
+S('tutorial', L('每一关都是同一个节奏：先遇到问题，再看看没有 git 的笨办法，然后学习 git 的做法，在沙盒里动手，最后做一个总结。',
+  'Every level follows the same rhythm: meet a problem, look at the crude no-git way, learn the git way, practise in the sandbox, and finish with a debrief.'),
+  async h => { await h.spot('.jv-loop', 5000); });
+S('tutorial', L('关掉总览。顶部这一条是任务线，每个圆点是一关，点一下就能跳过去。我们跳到第一站的“第一次快照”。',
+  'Close the overview. The strip at the top is the quest line: every dot is a level, and clicking one takes you there. Let us jump to the first snapshot level.'),
+  async h => { await h.page.evaluate(() => window.GitGame.closeJourney()); await sleep(600); await h.spot('#questline', 3500); await h.clickDot('c1-2'); });
+S('tutorial', L('每一关先是简报。第一张卡片是问题：', 'Each level starts with a briefing. The first card is the problem: ') + lv('c1-2').problem.story,
+  async h => { await h.spot('#briefing', 4000); });
+S('tutorial', L('第二张卡片：没有 git 的时候你会怎么做。', 'The second card: what you would do without git. ') + join(lv('c1-2').crude.steps.map(s => s.text)) + L('。代价是：', '. The cost: ') + lv('c1-2').crude.pain,
+  async h => { await h.click('.b-next'); await h.spot('.storyboard', 5000); await h.spot('.b-pain', 3000); });
+S('tutorial', L('第三张卡片是 git 的做法：', 'The third card is the git way: ') + lv('c1-2').git.idea,
+  async h => { await h.click('.b-next'); await h.spot('#briefing', 3000); });
+S('tutorial', L('第四张卡片提前告诉你这一关可能会经历什么：', 'The fourth card tells you in advance what you may run into: ') + lv('c1-2').expect[0],
+  async h => { await h.click('.b-next'); await h.spot('#briefing', 3000); await h.click('.b-start'); });
+S('tutorial', L('开始动手。左边一次只突出一个当前任务：这一步做什么、为什么做、要看哪个面板。',
+  'Now the hands-on part. On the left, only the current task is highlighted: what to do, why, and which panel to watch.'),
+  async h => { await h.spot('.task-current', 5000); });
+S('tutorial', L('先创建一个说明文件，再用 git add 把文件放进暂存区。右边的三棵树面板里，暂存区这一列已经登记了它们。',
+  'First we create a README, then use git add to put the files in the staging area. In the Three trees panel on the right, the staging column now lists them.'),
+  async h => { await h.type(L('echo "# 项目说明" > README.md', 'echo "# About this project" > README.md')); await h.type('git add .'); await h.tab('trees'); await h.spot('#tab-trees', 3500); });
+S('tutorial', L('如果输错命令会怎样？比如把 commit 拼错了。', 'What if you type something wrong? Say, a typo in commit.'),
+  async h => { await h.type(L('git comit -m "第一次提交"', 'git comit -m "First commit"')); await h.spot('#feedback-box', 2500); });
+S('tutorial', L('终端会给出和真实 git 一样的报错，下面的导师会告诉你哪里错了、该怎么改。输错不扣分，这本来就是学习的一部分。',
+  'The terminal shows the same error real git would, and the mentor below explains what went wrong and how to fix it. Mistakes cost nothing; they are part of learning.'),
+  async h => { await h.spot('.feedback', 5000); });
+S('tutorial', L('改正后，先用 git status 确认，再提交。', 'After fixing it, check with git status, then commit.'),
+  async h => { await h.type('git status', { pause: 2500 }); await h.type(L('git commit -m "第一次提交"', 'git commit -m "First commit"')); });
+S('tutorial', L('提交图上出现了第一个节点。原理对比面板会解释 git 在底层做了什么：创建了哪些对象、移动了哪个指针，以及如果用复制文件夹的办法要怎么做。',
+  'The first node appears in the commit graph. The Analogy panel explains what git did under the hood: which objects it created, which pointer moved, and how you would do the same by copying folders.'),
+  async h => { await h.tab('graph'); await h.spot('#tab-graph', 2500); await h.tab('analogy'); await h.spot('#analogy-card', 4500); await h.tab('graph'); });
+S('tutorial', L('全部任务完成后是总结：没有 git 和用 git 的对照、你用到的命令、常见的坑，以及下一关要解决的问题。',
+  'When all tasks are done you get a debrief: no-git versus git side by side, the commands you used, common pitfalls, and the next problem to solve.'),
+  async h => { await h.spot('#debrief', 7000); });
+
+S('tutorial', L('接下来看一个更难的问题：合并冲突。', 'Next, a harder problem: a merge conflict. ') + lv('c4-1').problem.story,
+  async h => { await h.go('c4-1'); await h.spot('#briefing', 3500); });
+S('tutorial', L('没有 git 的时候：', 'Without git: ') + join(lv('c4-1').crude.steps.map(s => s.text)) + L('。', '. ') + lv('c4-1').crude.pain,
+  async h => { await h.click('.b-next'); await h.spot('.storyboard', 6000); });
+S('tutorial', L('我们直接动手，先合并 feature 分支。', 'Let us get hands-on and merge the feature branch.'),
+  async h => { await h.click('.b-skip-link'); await sleep(400); await h.type('git merge feature', { pause: 2000 }); });
+S('tutorial', L('git 报告冲突。简报里已经提前说过，这是正常的。导师也给出了解决步骤。',
+  'Git reports a conflict. The briefing warned us this is normal, and the mentor lists the steps to resolve it.'),
+  async h => { await h.spot('#terminal', 2500); await h.spot('.feedback', 3500); });
+S('tutorial', L('打开文件看看。上半段是你这边的版本，下半段是 feature 分支的版本。git 不替你做决定，你要写出最终想要的样子。',
+  'Let us open the file. The top half is your side, the bottom half is the feature branch. Git will not decide for you; you write the final version.'),
+  async h => { await h.type('cat greeting.js', { pause: 4500 }); });
+S('tutorial', L('我们把两边的改动都保留下来，删掉冲突标记，然后保存。', 'We keep both changes, delete the conflict markers, and save.'),
+  async h => { await h.edit('greeting.js', 'export function greet(name) {\n  return "Hi, " + name.trim() + "!";\n}\n'); });
+S('tutorial', L('用 git add 告诉 git 冲突已经解决，再提交。提交图上出现了一个有两个父提交的合并提交。',
+  'Use git add to tell git the conflict is resolved, then commit. The graph now shows a merge commit with two parents.'),
+  async h => { await h.type('git add greeting.js'); await h.type(L('git commit -m "合并 feature，解决冲突"', 'git commit -m "Merge feature, resolve conflict"')); await h.tab('graph'); await h.spot('#tab-graph', 3000); });
+
+S('tutorial', L('再看多人协作里最常见的一幕。', 'Now the most common scene in teamwork. ') + lv('c5-4').problem.story,
+  async h => { await h.go('c5-4'); await h.spot('#briefing', 3000); });
+S('tutorial', L('没有 git 的时候：', 'Without git: ') + join(lv('c5-4').crude.steps.map(s => s.text)) + L('。', '. ') + lv('c5-4').crude.pain,
+  async h => { await h.click('.b-next'); await h.spot('.storyboard', 6000); await h.click('.b-skip-link'); });
+S('tutorial', L('多人面板里能同时看到你的仓库、服务器，以及小明的仓库。小明已经先推送了。',
+  'The Team panel shows your repository, the server, and Xiaoming\'s repository side by side. Xiaoming has already pushed.'),
+  async h => { await h.tab('multi'); await h.spot('#tab-multi', 5000); });
+S('tutorial', L('我们试着推送。推送被拒绝了。这不是故障，而是 git 在保护小明的提交：服务器只接受建立在它最新版本之上的推送。',
+  'We try to push, and it gets rejected. That is not a failure: git is protecting Xiaoming\'s commit. The server only accepts pushes built on top of its latest version.'),
+  async h => { await h.type('git push', { pause: 3000 }); await h.spot('.feedback', 3000); });
+S('tutorial', L('先用 git pull --rebase 把小明的提交拉下来，你的提交接在后面，再推送。两个人的工作都保住了。',
+  'First pull with rebase: Xiaoming\'s commit comes down and yours goes on top. Then push again, and both people\'s work is safe.'),
+  async h => { await h.type('git pull --rebase', { pause: 2000 }); await h.type('git log --oneline --graph', { pause: 2500 }); await h.type('git push', { pause: 2000 }); await h.tab('multi'); await h.spot('#tab-multi', 3000); });
+
+S('tutorial', L('最后是后悔药。', 'Finally, undo. ') + lv('c2-6').problem.story,
+  async h => { await h.go('c2-6'); await h.click('.b-skip-link'); await h.type('git log --oneline', { pause: 2500 }); });
+S('tutorial', L('git log 里看不到那几个提交了，但它们并没有真的消失。git reflog 记录了 HEAD 的每一次移动。',
+  'The commits are gone from git log, but they have not really disappeared. git reflog records every move of HEAD.'),
+  async h => { await h.type('git reflog', { pause: 4000 }); });
+S('tutorial', L('回到重置之前的位置，三个提交全都回来了。', 'Go back to where HEAD was before the reset, and all three commits are back.'),
+  async h => { await h.type('git reset --hard HEAD@{1}', { pause: 1500 }); await h.type('git log --oneline', { pause: 3000 }); });
+S('tutorial', L('这就是 Git 沙盒学院：先遇到问题，再学解决问题的 git 操作。一切都在浏览器里，可以随便犯错，随时重来。祝你玩得开心。',
+  'That is Git Sandbox Academy: meet the problem first, then learn the git that solves it. Everything runs in your browser, so make mistakes freely and start over any time. Have fun.'),
+  async h => { await h.page.evaluate(() => window.GitGame.openJourney()); await sleep(800); await h.card(L('开始你的 git 旅程', 'Start your git journey'), 'github.com/kaixindelele/gitgame'); });
+
+// ===== 宣传视频 =====
+S('promo', L('你的电脑里，是不是也有一堆“最终版”、“最终版二”、“真的最终版”？',
+  'Does your computer also have a pile of folders called final, final two, and really final?'),
+  async h => { await h.page.evaluate(() => window.GitGame.closeJourney()); await h.go('c0-2'); await h.click('.b-skip-link'); await h.type('ls', { pause: 3500 }); });
+S('promo', L('没有 git 的时候，我们只能复制文件夹、传压缩包，然后在群里问：谁有最新版？',
+  'Without git we copy folders, pass zip files around, and ask the group chat who has the latest version.'),
+  async h => { await h.card(L('还在用「最终版2_真的最终.zip」？', 'Still using "final_v2_REALLY_final.zip"?'), '', 'linear-gradient(135deg,#2a1414,#0f1218)'); });
+S('promo', L('Git 沙盒学院，用真实的 git 逻辑，在浏览器里一步一步学会 git。',
+  'Git Sandbox Academy teaches you git step by step, in your browser, with real git logic.'),
+  async h => { await h.card(L('Git 沙盒学院', 'Git Sandbox Academy'), L('在浏览器里，用真实的 git 逻辑学 git', 'Learn git with real git logic, right in your browser')); });
+S('promo', L('九个阶段，按你真实会遇到的问题排好：存档、后悔药、分支、冲突、多人协作、事故恢复、追查 bug。',
+  'Nine stages, ordered by the problems you will really face: saving, undoing, branching, conflicts, teamwork, accidents and bug hunting.'),
+  async h => { await h.page.evaluate(() => window.GitGame.openJourney()); await sleep(600); await h.scroll('#journey', 1400, 6000); });
+S('promo', L('每一关先让你看到没有 git 时的笨办法和它的代价，再教你 git 的做法。',
+  'Every level first shows you the crude no-git way and what it costs, then teaches you the git way.'),
+  async h => { await h.page.evaluate(() => window.GitGame.closeJourney()); await h.go('c5-4'); await h.click('.b-next'); await h.spot('.storyboard', 4500); });
+S('promo', L('冲突、被拒绝的推送、找回删掉的提交，都在一个可以随便犯错的沙盒里亲手体验。',
+  'Conflicts, rejected pushes, recovering deleted commits: you try them all yourself in a sandbox where mistakes are welcome.'),
+  async h => { await h.go('c4-1'); await h.click('.b-skip-link'); await h.type('git merge feature', { pause: 1500 }); await h.type('cat greeting.js', { pause: 2500 }); });
+S('promo', L('输错了？导师会告诉你为什么错、怎么改。', 'Typed something wrong? The mentor tells you why and how to fix it.'),
+  async h => { await h.type('git comit', { pause: 800 }); await h.spot('.feedback', 3000); });
+S('promo', L('虚拟同事会真的提交和推送，你能亲眼看到多人协作里会发生什么。',
+  'Virtual teammates really commit and push, so you see exactly what happens when people work together.'),
+  async h => { await h.go('c5-4'); await h.click('.b-skip-link'); await h.tab('multi'); await h.type('git push', { pause: 2500 }); });
+S('promo', L('中英文双语，打开网页就能玩。现在就开始你的 git 旅程吧。',
+  'Chinese and English, nothing to install. Start your git journey today.'),
+  async h => { await h.card(L('Git 沙盒学院', 'Git Sandbox Academy'), 'github.com/kaixindelele/gitgame<br><span style="color:#f5a25d">' + L('9 个阶段 · 42 关 · 可以随便犯错', '9 stages · 42 levels · mistakes welcome') + '</span>'); });
+
+/* ---------- 执行 ---------- */
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const server = http.createServer((req, res) => { let p = decodeURIComponent(req.url.split('?')[0]); if (p === '/') p = '/index.html'; const f = path.join(root, p); if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' }); fs.createReadStream(f).pipe(res); });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
+  const scenes = SCENES[MODE];
+  // ① 合成旁白
+  const jobs = scenes.map((s, i) => ({ id: `s${String(i).padStart(2, '0')}`, lang: LANG, text: s.say.replace(/<[^>]+>/g, '') }));
+  fs.writeFileSync(path.join(work, 'jobs.json'), JSON.stringify(jobs, null, 1));
+  execFileSync('python3', [path.join(root, 'tools/tts_batch.py'), path.join(work, 'jobs.json'), path.join(work, 'audio')], { stdio: 'inherit' });
+  const dur = JSON.parse(fs.readFileSync(path.join(work, 'audio', 'durations.json'), 'utf8'));
+
+  // ② 录屏
   const PORT = parseInt(process.env.PORT || '8766', 10);
   await new Promise(r => server.listen(PORT, r));
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, recordVideo: { dir: tmpDir, size: { width: 1280, height: 720 } }, deviceScaleFactor: 1 });
+  const vdir = path.join(work, 'raw'); fs.rmSync(vdir, { recursive: true, force: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, recordVideo: { dir: vdir, size: { width: 1280, height: 720 } } });
   const page = await context.newPage();
-  await page.goto(`http://localhost:${PORT}/?lang=${EN ? 'en' : 'zh'}#c0-1`);
+  const t0 = Date.now();
+  await page.goto(`http://localhost:${PORT}/?lang=${LANG}`);
   await page.waitForSelector('#term-input');
-  await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
+  await page.evaluate(() => { try { localStorage.setItem('gitgame.tour', 'done'); } catch (e) {} });
+  await page.addStyleTag({ content: `
+    #__cap{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);max-width:86%;background:rgba(8,12,20,.9);color:#fff;font:600 19px/1.55 -apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;padding:10px 20px;border-radius:12px;z-index:99999;border:1px solid rgba(255,255,255,.15);box-shadow:0 8px 30px rgba(0,0,0,.5);text-align:center;transition:opacity .25s;pointer-events:none}
+    .__spot{outline:3px solid #f5a25d !important;outline-offset:3px;box-shadow:0 0 0 9999px rgba(0,0,0,.35) !important;position:relative;z-index:9000 !important;border-radius:8px;transition:outline .2s}
+    #__card{position:fixed;inset:0;z-index:100000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;transition:opacity .5s}` });
 
-  /* 字幕 / 标题卡 */
-  const caption = async (text, ms = 0) => { await page.evaluate(t => { let el = document.getElementById('__cap'); if (!el) { el = document.createElement('div'); el.id = '__cap'; el.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);max-width:82%;background:rgba(8,12,20,.88);color:#fff;font:600 21px/1.5 -apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;padding:12px 22px;border-radius:12px;z-index:9999;border:1px solid rgba(255,255,255,.15);box-shadow:0 8px 30px rgba(0,0,0,.5);text-align:center;transition:opacity .25s'; document.body.appendChild(el); } el.style.opacity = t ? '1' : '0'; el.innerHTML = t; }, text); if (ms) await sleep(ms); };
-  const card = async (title, sub, ms = 2500, bg = 'linear-gradient(135deg,#0f1218,#1b2a3a)') => { await caption(''); await page.evaluate(([t, s, b]) => { let el = document.getElementById('__card'); if (!el) { el = document.createElement('div'); el.id = '__card'; document.body.appendChild(el); } el.style.cssText = `position:fixed;inset:0;background:${b};z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;transition:opacity .4s;opacity:1`; el.innerHTML = `<div style="font-size:64px;margin-bottom:10px">⎇</div><div style="font-size:54px;font-weight:800;letter-spacing:1px;text-align:center;max-width:90%">${t}</div><div style="font-size:24px;color:#9cd1ff;margin-top:18px;text-align:center;max-width:80%;line-height:1.6">${s}</div>`; }, [title, sub, bg]); await sleep(ms); await page.evaluate(() => { const el = document.getElementById('__card'); if (el) { el.style.opacity = '0'; setTimeout(() => el.remove(), 450); } }); await sleep(500); };
-  const badge = async (text, ms = 1800) => { await page.evaluate(t => { const el = document.createElement('div'); el.className = '__badge'; el.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%) scale(.9);background:#f5a25d;color:#0f1218;font:800 30px/1 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:14px 26px;border-radius:14px;z-index:9999;box-shadow:0 10px 30px rgba(0,0,0,.5);transition:transform .2s'; el.textContent = t; document.body.appendChild(el); requestAnimationFrame(() => el.style.transform = 'translateX(-50%) scale(1)'); setTimeout(() => el.remove(), 1800); }, text); await sleep(ms); };
-  const go = async (id) => { await caption(''); await page.evaluate(i => window.GitGame.loadLevel(i), id); await sleep(400); };
-  const type = async (cmd, { delay = 38, pause = 1400 } = {}) => { await page.focus('#term-input'); await page.type('#term-input', cmd, { delay }); await sleep(250); await page.press('#term-input', 'Enter'); await sleep(pause); };
-  const tab = async (name, ms = 1800) => { await page.click(`.tab[data-tab="${name}"]`); await sleep(ms); };
-  const editFile = async (cmd, content, pause = 1200) => { await type(cmd, { pause: 600 }); await page.waitForSelector('#editor-modal:not(.hidden)'); await page.fill('#editor-text', ''); await page.type('#editor-text', content, { delay: 22 }); await sleep(600); await page.click('#editor-save'); await sleep(pause); };
-  const clickTaskGlow = async () => { await page.evaluate(() => { const li = document.querySelector('#task-list'); if (li) { li.style.transition = 'box-shadow .3s'; li.style.boxShadow = '0 0 0 3px #5fd38d55'; setTimeout(() => li.style.boxShadow = '', 1500); } }); };
+  const h = {
+    page,
+    async caption(text) { await page.evaluate(t => { let el = document.getElementById('__cap'); if (!el) { el = document.createElement('div'); el.id = '__cap'; document.body.appendChild(el); } el.style.opacity = t ? '1' : '0'; el.textContent = t; }, text || ''); },
+    async card(title, sub, bg = 'linear-gradient(135deg,#0f1218,#1b2a3a)', ms = 3500) {
+      await page.evaluate(([t, s, b]) => { const el = document.createElement('div'); el.id = '__card'; el.style.background = b; el.innerHTML = `<div style="font-size:60px;margin-bottom:12px">⎇</div><div style="font-size:50px;font-weight:800;text-align:center;max-width:90%">${t}</div><div style="font-size:24px;color:#9cd1ff;margin-top:18px;text-align:center;max-width:80%;line-height:1.6">${s}</div>`; document.body.appendChild(el); }, [title, sub, bg]);
+      await sleep(ms);
+      await page.evaluate(() => { const el = document.getElementById('__card'); if (el) { el.style.opacity = '0'; setTimeout(() => el.remove(), 550); } });
+      await sleep(600);
+    },
+    async spot(sel, ms = 2500) {
+      const ok = await page.evaluate(s => { const el = document.querySelector(s); if (!el) return false; el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); el.classList.add('__spot'); return true; }, sel);
+      await sleep(ms);
+      if (ok) await page.evaluate(s => { const el = document.querySelector(s); if (el) el.classList.remove('__spot'); }, sel);
+    },
+    async scroll(sel, top, ms) { await page.evaluate(([s, t]) => { const el = document.querySelector(s); if (el) el.scrollTo({ top: t, behavior: 'smooth' }); }, [sel, top]); await sleep(ms); },
+    async click(sel) { const el = await page.$(sel); if (el) { await el.click(); } await sleep(700); },
+    async tab(name) { await page.click(`.tab[data-tab="${name}"]`); await sleep(500); },
+    async go(id) { await page.evaluate(i => window.GitGame.loadLevel(i), id); await sleep(900); },
+    async clickDot(id) { await h.spot(`.ql-dot[data-id="${id}"]`, 1500); await page.click(`.ql-dot[data-id="${id}"]`); await sleep(900); },
+    async type(cmd, { pause = 1600 } = {}) { await page.focus('#term-input'); await page.type('#term-input', cmd, { delay: TYPE_DELAY }); await sleep(400); await page.press('#term-input', 'Enter'); await sleep(pause); },
+    async edit(file, content) { await h.type(`edit ${file}`, { pause: 800 }); await page.waitForSelector('#editor-modal:not(.hidden)'); await page.fill('#editor-text', ''); await page.type('#editor-text', content, { delay: 45 }); await sleep(1200); await page.click('#editor-save'); await sleep(1000); },
+  };
 
-  if (mode === 'tutorial') {
-    await card(L('Git 沙盒学院', 'Git Sandbox Academy'), L('在浏览器里，用真实的 git 逻辑，从“复制文件夹备份”讲起<br>教学视频 · 约 3 分钟', 'Real git logic in your browser, starting from “copy the folder as a backup”<br>Tutorial · about 3 minutes'), 3500);
-    await caption(L('第 0 章：没有 git 的日子。先用最原始的办法——整个文件夹复制一份。', 'Chapter 0: life before git. Start with the most primitive method: copy the whole folder.'), 2200);
-    await type('ls');
-    await type('cp -r project project_v1');
-    await caption(L('改了代码之后再备份一份……每次都是完整复制，没有说明，也不知道先后关系。', 'Change the code, back it up again… Every backup is a full copy, with no description and no record of what came first.'), 500);
-    await type(L('echo "// 新功能" >> project/app.js', 'echo "// new feature" >> project/app.js'));
-    await type('cp -r project project_v2');
-    await type('diff -r project_v1 project_v2', { pause: 2200 });
-    await type('du -sh *', { pause: 2400 });
-    await caption(L('痛点出现了：重复存储、没有说明、没有顺序。git 解决的就是这三件事。', 'The pain points: duplicated storage, no descriptions, no order. These are exactly the three things git solves.'), 2600);
-
-    await go('c1-2');
-    await caption(L('第 1 章：三棵树。工作区 → git add → 暂存区 → git commit → 提交历史。', 'Chapter 1: the three trees. Working tree → git add → staging area → git commit → history.'), 2600);
-    await type(L('echo "# 项目说明" > README.md', 'echo "# About this project" > README.md'));
-    await type('git status', { pause: 2600 });
-    await caption(L('git 的输出和真实 git 完全一致：README.md 是 Untracked，还没被跟踪。', 'The output matches real git exactly: README.md is untracked, so git is not following it yet.'), 2400);
-    await type('git add .');
-    await tab('trees', 400);
-    await caption(L('右侧“三棵树”：暂存区那一列已经登记了两个文件的哈希，HEAD 还是空的。', 'The “Three trees” panel: the staging column already holds hashes for both files, while HEAD is still empty.'), 3000);
-    await type(L('git commit -m "第一次提交"', 'git commit -m "First commit"'), { pause: 1500 });
-    await tab('analogy', 400);
-    await caption(L('“原理对比”面板：git 底层创建了 blob / tree / commit，对照“复制文件夹”的做法，差别在哪。', 'The “Analogy” panel: git created a blob / tree / commit under the hood. Here is how that compares with copying folders.'), 4200);
-    await page.evaluate(() => document.getElementById('tab-analogy').scrollTo({ top: 600, behavior: 'smooth' }));
-    await caption(L('每个提交被画成一个“备份文件夹”，没变的文件标为“共享”——git 不会重复存储它们。', 'Each commit is drawn as a “backup folder”. Unchanged files are marked “shared”: git never stores them twice.'), 3600);
-    await tab('graph', 400);
-    await caption(L('任务全部打勾，本关完成。所有判定都基于真实的仓库状态，而不是命令字符串。', 'Every task is ticked and the level is done. Tasks are checked against the real repository state, not the text you typed.'), 2600);
-
-    await go('c3-3');
-    await caption(L('第 3 章：分支与合并。main 和 feature 各自有新提交，需要三方合并。', 'Chapter 3: branches and merging. main and feature both have new commits, so this needs a three-way merge.'), 2600);
-    await type('git log --oneline --graph --all', { pause: 2600 });
-    await type('git merge feature', { pause: 2200 });
-    await caption(L('提交图上出现了有两个父提交的合并提交（空心圆）。点击任何提交可以看它的快照内容。', 'The graph now shows a merge commit with two parents (the hollow circle). Click any commit to see its snapshot.'), 1000);
-    await page.evaluate(() => { const g = document.querySelector('#graph-svg .g-node'); if (g) g.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    await sleep(3200);
-
-    await go('c4-1');
-    await caption(L('第 4 章：冲突。两条分支改了同一行，git 无法替你决定。', 'Chapter 4: conflicts. Both branches changed the same line, and git cannot decide for you.'), 2400);
-    await type('git merge feature', { pause: 2400 });
-    await caption(L('反馈面板解释了冲突标记的含义和解决步骤。先看看文件：', 'The mentor explains the conflict markers and how to resolve them. First, look at the file:'), 1000);
-    await type('cat greeting.js', { pause: 3000 });
-    await caption(L('用内置编辑器把文件改成最终想要的样子，删掉 <<<<<<< ======= >>>>>>> 标记。', 'Use the built-in editor to write the final version and delete the <<<<<<< ======= >>>>>>> markers.'), 800);
-    await editFile('edit greeting.js', 'export function greet(name) {\n  return "Hi, " + name.trim() + "!";\n}\n', 900);
-    await type('git add greeting.js');
-    await type(L('git commit -m "合并 feature，解决冲突"', 'git commit -m "Merge feature and resolve conflict"'), { pause: 2600 });
-    await caption(L('如果你 add 了一个还带着标记的文件，游戏会立刻警告你——真实 git 可不会。', 'If you add a file that still has markers in it, the game warns you right away. Real git will not.'), 3000);
-
-    await go('c5-4');
-    await caption(L('第 5 章：多人协作。同事小明和你同时改代码，他先推送了。', 'Chapter 5: teamwork. Your teammate Xiaoming changed the code at the same time as you, and he pushed first.'), 2600);
-    await tab('multi', 400);
-    await caption(L('“多人”面板同时显示你的仓库、服务器上的 origin、以及小明的克隆。', 'The “Team / Remote” panel shows your repo, origin on the server, and Xiaoming’s clone side by side.'), 3200);
-    await tab('graph', 300);
-    await type('git push', { pause: 3400 });
-    await caption(L('被拒绝了！这就是真实 git 的 non-fast-forward 保护：不允许覆盖别人的提交。', 'Rejected! That is real git’s non-fast-forward protection: you may not overwrite someone else’s commits.'), 3000);
-    await type('git pull --rebase', { pause: 2600 });
-    await type('git log --oneline --graph', { pause: 2400 });
-    await type('git push', { pause: 2400 });
-    await caption(L('先拉后推，两个人的提交都在远程上了。', 'Pull first, then push: both people’s commits are now on the remote.'), 2200);
-
-    await go('c7-3');
-    await caption(L('第 7 章：定位 bug。测试失败了，但 v1.0 是好的，中间有 15 个提交。用二分查找。', 'Chapter 7: hunting bugs. The tests fail now, v1.0 was fine, and there are 15 commits in between. Time for a binary search.'), 2800);
-    await type('npm test', { pause: 2200 });
-    await type('git bisect start');
-    await type('git bisect bad');
-    await type('git bisect good v1.0', { pause: 2200 });
-    for (let i = 0; i < 5; i++) {
-      await type('npm test', { pause: 1200 });
-      const ok = await page.$eval('#term-output', el => /2 passing\s*$/.test(el.innerText.trim()));
-      const r = await type(ok ? 'git bisect good' : 'git bisect bad', { pause: 1600 });
-      const found = await page.$eval('#term-output', el => /is the first bad commit/.test(el.innerText));
-      if (found) break;
-    }
-    await caption(L('4 次测试就找到了肇事提交：日常改动 9。接下来 git bisect reset 回到 main，再 revert 它。', 'Four test runs pinpoint the culprit: routine change no. 9. Next, git bisect reset returns to main, and then you revert it.'), 3400);
-    await type('git bisect reset', { pause: 1500 });
-
-    await go('c2-6');
-    await caption(L('第 2 章还有“找回丢失的提交”：手抖 reset --hard 之后，用 reflog 把一切救回来。', 'Chapter 2 also covers “recovering lost commits”: after a careless reset --hard, reflog brings everything back.'), 2800);
-    await type('git log --oneline', { pause: 1800 });
-    await type('git reflog', { pause: 3000 });
-    await type('git reset --hard HEAD@{1}', { pause: 2200 });
-    await caption(L('三个“消失”的提交回来了。git 几乎什么都能找回——除了从没 add 过的修改。', 'The three “vanished” commits are back. git can recover almost anything, except changes you never added.'), 3000);
-
-    await page.click('#btn-levels'); await sleep(600);
-    await caption(L('9 章 42 关：备份的痛 → 基础 → 撤销 → 分支 → 冲突 → 协作 → 恢复 → 定位 bug → 自由沙盒。', '9 chapters, 42 levels: backup pain → basics → undo → branches → conflicts → teamwork → recovery → bug hunting → free sandbox.'), 3600);
-    await page.click('#levels-close'); await sleep(300);
-    await card(L('开始你的 git 之旅', 'Start your git journey'), L('纯静态页面，打开 index.html 即可游玩<br>每一步都能试错，每一步都有解释', 'A purely static page: open index.html and play<br>Every step is safe to try, and every step is explained'), 4000);
-  } else {
-    await card(L('还在用 “项目_最终版2_真的最终.zip”？', 'Still using “project_final_v2_REALLY_final.zip”?'), '', 2600, 'linear-gradient(135deg,#2a1414,#0f1218)');
-    await go('c0-2'); await type('ls', { delay: 20, pause: 1600 });
-    await caption(L('备份地狱。', 'Backup hell.'), 1400); await caption('');
-    await card(L('Git 沙盒学院', 'Git Sandbox Academy'), L('在浏览器里，用真实的 git 逻辑学 git', 'Learn git with real git logic, right in your browser'), 2600);
-    await go('c1-2');
-    await type('git add .', { delay: 25, pause: 500 }); await type(L('git commit -m "第一次提交"', 'git commit -m "First commit"'), { delay: 25, pause: 900 });
-    await tab('analogy', 200);
-    await badge(L('每条命令都告诉你：底层发生了什么', 'Every command shows what happens under the hood'), 2200);
-    await tab('graph', 200);
-    await go('c4-1');
-    await type('git merge feature', { delay: 20, pause: 1200 });
-    await badge(L('真实的冲突，真实的报错', 'Real conflicts, real error messages'), 2000);
-    await editFile('edit greeting.js', 'export function greet(name) {\n  return "Hi, " + name.trim() + "!";\n}\n', 500);
-    await type('git add greeting.js && git commit -m "resolve"', { delay: 20, pause: 1200 });
-    await go('c5-4'); await tab('multi', 200);
-    await badge(L('和虚拟同事一起协作', 'Collaborate with virtual teammates'), 1800);
-    await tab('graph', 200);
-    await type('git push', { delay: 20, pause: 1800 });
-    await badge(L('被拒绝？先拉再推', 'Rejected? Pull, then push'), 1600);
-    await type('git pull --rebase && git push', { delay: 20, pause: 1800 });
-    await go('c2-6'); await type('git reflog', { delay: 15, pause: 1400 });
-    await badge(L('手抖删了？reflog 救回来', 'Deleted by accident? reflog brings it back'), 1800);
-    await type('git reset --hard HEAD@{1}', { delay: 20, pause: 1400 });
-    await go('c7-3'); await type('git bisect start && git bisect bad && git bisect good v1.0', { delay: 12, pause: 1400 });
-    await badge(L('二分定位 bug 提交', 'Binary-search the commit that broke it'), 1800);
-    await page.click('#btn-levels'); await sleep(300);
-    await badge(L('9 章 · 42 关 · 可试错沙盒', '9 chapters · 42 levels · a sandbox where mistakes are safe'), 2200);
-    await page.click('#levels-close');
-    await card(L('Git 沙盒学院', 'Git Sandbox Academy'), L('纯静态 · 零依赖 · 打开 index.html 即玩<br><span style="color:#f5a25d">从复制文件夹，到多人协作与 bug 定位</span>', 'Static · zero dependencies · open index.html and play<br><span style="color:#f5a25d">From copying folders to teamwork and bug hunting</span>'), 4000);
+  const timeline = [];
+  for (let i = 0; i < scenes.length; i++) {
+    const s = scenes[i]; const id = jobs[i].id;
+    const start = Date.now();
+    timeline.push({ id, t: (start - t0) / 1000 });
+    await h.caption(s.say.replace(/<[^>]+>/g, ''));
+    await s.run(h);
+    const need = (dur[id].sec + 0.8) * 1000 - (Date.now() - start);
+    if (need > 0) await sleep(need);
+    console.log(`scene ${id} done (${((Date.now() - start) / 1000).toFixed(1)}s, voice ${dur[id].sec}s)`);
   }
+  await h.caption(''); await sleep(800);
+  await page.close(); await context.close(); await browser.close(); server.close();
 
-  await sleep(300);
-  await page.close();
-  await context.close(); await browser.close(); server.close();
-  const webm = fs.readdirSync(tmpDir).find(f => f.endsWith('.webm'));
-  const ffmpeg = require('child_process').execSync('python3 -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"').toString().trim();
-  const out = path.join(outDir, (mode === 'tutorial' ? 'tutorial' : 'promo') + (EN ? '.en' : '') + '.mp4');
-  execFileSync(ffmpeg, ['-y', '-ss', '0.6', '-i', path.join(tmpDir, webm), '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-r', '25', out], { stdio: 'ignore' });
-  console.log('wrote', out, Math.round(fs.statSync(out).size / 1024) + 'KB');
+  // ③ 合成音轨并封装
+  const ffmpeg = execSync('python3 -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"').toString().trim();
+  const webm = path.join(vdir, fs.readdirSync(vdir).find(f => f.endsWith('.webm')));
+  const args = ['-y', '-i', webm];
+  timeline.forEach(x => args.push('-i', path.join(work, 'audio', `${x.id}.wav`)));
+  const LEAD = 0.35; // 旁白比画面略晚一点开始
+  const filters = timeline.map((x, i) => `[${i + 1}:a]adelay=${Math.round((x.t + LEAD) * 1000)}:all=1[a${i}]`);
+  filters.push(`${timeline.map((_, i) => `[a${i}]`).join('')}amix=inputs=${timeline.length}:normalize=0:dropout_transition=0,volume=1.6,aresample=48000[aout]`);
+  args.push('-filter_complex', filters.join(';'), '-map', '0:v', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', '-r', '25', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-shortest', outFile);
+  execFileSync(ffmpeg, args, { stdio: 'ignore' });
+  console.log('wrote', outFile, Math.round(fs.statSync(outFile).size / 1024) + 'KB');
 })().catch(e => { console.error(e); process.exit(1); });
