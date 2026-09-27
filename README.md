@@ -4,8 +4,8 @@
 
 一个**纯静态、零依赖**的网页游戏：打开 `index.html` 就能玩。它在浏览器里实现了一个遵循真实 git 逻辑的引擎（blob / tree / commit 对象、SHA-1 哈希、暂存区、引用、reflog、三方合并、远程与裸仓库），从最原始的“复制文件夹备份”讲起，一路带你走到分支、冲突、多人协作、数据恢复和 bug 定位。
 
-- 🎬 教学视频：[`media/tutorial.mp4`](media/tutorial.mp4)（约 3 分钟）· 英文版 [`media/tutorial.en.mp4`](media/tutorial.en.mp4)
-- 📣 宣传视频：[`media/promo.mp4`](media/promo.mp4)（约 1 分钟）· 英文版 [`media/promo.en.mp4`](media/promo.en.mp4)
+- 🎬 教学视频：[`media/tutorial.mp4`](media/tutorial.mp4)（约 6.5 分钟，带配音和字幕）· 英文版 [`media/tutorial.en.mp4`](media/tutorial.en.mp4)
+- 📣 宣传视频：[`media/promo.mp4`](media/promo.mp4)（约 1 分钟，带配音）· 英文版 [`media/promo.en.mp4`](media/promo.en.mp4)
 - 🌐 中英双语：点顶栏的语言按钮（EN / 中文）切换，或在网址后加 `?lang=en` / `?lang=zh`（按钮的选择会被记住）。
 
 ## 以“问题”驱动的学习旅程
@@ -109,7 +109,8 @@ test/engine.test.js   引擎回归测试（node test/engine.test.js）
 test/levels.test.js   每一关按提示自动通关的可解性测试
 test/browser.test.js  Playwright 浏览器冒烟测试
 test/play.js          命令行试玩：node test/play.js c3-2 "git merge feature"
-test/record.js        录制教学/宣传视频
+test/record.js        录制带配音的教学/宣传视频（VIDEO_LANG=zh|en node test/record.js tutorial|promo）
+tools/tts_batch.py    离线语音合成（sherpa-onnx + Kokoro）
 deploy/server-setup.sh 服务器部署脚本（配合 .github/workflows/server.yml）（VIDEO_LANG=en 录英文版）
 media/                视频（tutorial / promo 的中文版 .mp4 与英文版 .en.mp4）
 ```

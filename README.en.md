@@ -4,8 +4,8 @@
 
 A **purely static, zero-dependency** web game: open `index.html` and play. It ships an engine that follows real git semantics inside the browser (blob / tree / commit objects, SHA-1 hashes, the staging area, refs, reflog, three-way merges, remotes and bare repositories). It starts from the most primitive approach, "copy the folder as a backup", and takes you all the way through branching, conflicts, teamwork, data recovery and bug hunting.
 
-- 🎬 Tutorial video: [`media/tutorial.en.mp4`](media/tutorial.en.mp4) (about 3 minutes) · Chinese version: [`media/tutorial.mp4`](media/tutorial.mp4)
-- 📣 Promo video: [`media/promo.en.mp4`](media/promo.en.mp4) (about 1 minute) · Chinese version: [`media/promo.mp4`](media/promo.mp4)
+- 🎬 Tutorial video: [`media/tutorial.en.mp4`](media/tutorial.en.mp4) (about 6 minutes, narrated with subtitles) · Chinese version: [`media/tutorial.mp4`](media/tutorial.mp4)
+- 📣 Promo video: [`media/promo.en.mp4`](media/promo.en.mp4) (about 1 minute, narrated) · Chinese version: [`media/promo.mp4`](media/promo.mp4)
 - 🌐 Bilingual (English / Chinese): switch with the language button in the top bar (EN / 中文), or add `?lang=en` / `?lang=zh` to the URL (the button remembers your choice).
 
 ## A learning journey driven by problems
@@ -109,7 +109,8 @@ test/engine.test.js   engine regression tests (node test/engine.test.js)
 test/levels.test.js   checks that every level can be solved by following its hints
 test/browser.test.js  Playwright browser smoke test
 test/play.js          play from the command line: node test/play.js c3-2 "git merge feature"
-test/record.js        records the tutorial / promo videos (VIDEO_LANG=en records the English versions)
+test/record.js        records the narrated tutorial / promo videos (VIDEO_LANG=zh|en node test/record.js tutorial|promo)
+tools/tts_batch.py    offline text-to-speech (sherpa-onnx + Kokoro)
 media/                videos (tutorial / promo: Chinese .mp4 and English .en.mp4)
 ```
 

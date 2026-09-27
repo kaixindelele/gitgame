@@ -210,10 +210,10 @@ const server = http.createServer((req, res) => { let p = decodeURIComponent(req.
   // ③ 合成音轨并封装
   const ffmpeg = execSync('python3 -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())"').toString().trim();
   const webm = path.join(vdir, fs.readdirSync(vdir).find(f => f.endsWith('.webm')));
-  const args = ['-y', '-i', webm];
+  const args = ['-y', '-ss', '0.8', '-i', webm]; // 去掉开头页面加载时的白屏
   timeline.forEach(x => args.push('-i', path.join(work, 'audio', `${x.id}.wav`)));
   const LEAD = 0.35; // 旁白比画面略晚一点开始
-  const filters = timeline.map((x, i) => `[${i + 1}:a]adelay=${Math.round((x.t + LEAD) * 1000)}:all=1[a${i}]`);
+  const filters = timeline.map((x, i) => `[${i + 1}:a]adelay=${Math.max(0, Math.round((x.t + LEAD - 0.8) * 1000))}:all=1[a${i}]`);
   filters.push(`${timeline.map((_, i) => `[a${i}]`).join('')}amix=inputs=${timeline.length}:normalize=0:dropout_transition=0,volume=1.2,alimiter=limit=0.89:level=false,aresample=48000[aout]`);
   args.push('-filter_complex', filters.join(';'), '-map', '0:v', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', '-r', '25', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-shortest', outFile);
   execFileSync(ffmpeg, args, { stdio: 'ignore' });
