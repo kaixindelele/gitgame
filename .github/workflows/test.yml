@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [zh, en]
+    env:
+      GITGAME_LANG: ${{ matrix.lang }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Engine tests / 引擎测试
+        run: node test/engine.test.js
+      - name: Every level is solvable / 每一关都可通关
+        run: node test/levels.test.js
