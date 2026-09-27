@@ -6,7 +6,11 @@
   const STORAGE = 'gitgame.progress.v1';
 
   const Fx = window.GitGameFx;
+  const J = window.GitJourney;
+  const ORDER = J.order();
+  const levelById = id => LEVELS.find(l => l.id === id);
   const app = {
+    phase: 'brief', started: false, revealed: [], briefStep: 0, lastTabClick: 0, tourPending: false,
     world: null, level: null, ctx: null, sticky: [], hintsShown: 0, completed: {}, achievements: {}, xp: 0, term: null, lastTrace: [], lastArgv: null, selectedCommit: null, levelState: {},
   };
 
@@ -40,8 +44,14 @@
 
   /* ---------- 本关进度持久化（刷新后回放命令） ---------- */
   const SESSION = 'gitgame.session.v1';
-  function saveSession() { try { localStorage.setItem(SESSION, JSON.stringify({ level: app.level.id, hints: app.hintsShown, log: app.session })); } catch (e) { } }
+  function saveSession() { try { localStorage.setItem(SESSION, JSON.stringify({ level: app.level.id, hints: app.revealed.length, revealed: app.revealed, started: !!app.started, log: app.session })); } catch (e) { } }
   function loadSession() { try { return JSON.parse(localStorage.getItem(SESSION) || 'null'); } catch (e) { return null; } }
+  function restoreHints(sess) {
+    const n = app.level.hints.length;
+    const rev = Array.isArray(sess.revealed) ? sess.revealed : Array.from({ length: Math.min(sess.hints || 0, n) }, (_, i) => i);
+    app.revealed = [...new Set(rev.filter(i => Number.isInteger(i) && i >= 0 && i < n))];
+    app.hintsShown = app.revealed.length;
+  }
   function replaySession(sess) {
     app.replaying = true;
     for (const e of sess.log) {
@@ -51,8 +61,6 @@
       else if (e.action !== undefined && app.level.actions && app.level.actions[e.action]) { try { app.level.actions[e.action].run(app.ctx); } catch (x) { } }
     }
     app.replaying = false;
-    app.hintsShown = sess.hints || 0;
-    if (app.hintsShown) $('#hint-list').innerHTML = app.level.hints.slice(0, app.hintsShown).map(h => `<li>${esc(h)}</li>`).join('');
     app.term.append(T(`（已恢复本关进度：回放了 ${sess.log.length} 步。想从头来点“重置本关”）`, `(Restored your progress on this level: replayed ${sess.log.length} step${sess.log.length === 1 ? '' : 's'}. Click “Reset level” to start over.)`), 't-info');
     evaluate('', {});
   }
@@ -75,7 +83,7 @@
     return ctx;
   }
   function loadLevel(id, { resume = false } = {}) {
-    const level = LEVELS.find(l => l.id === id) || LEVELS[0];
+    const level = levelById(id) || levelById(ORDER[0]) || LEVELS[0];
     app.session = [];
     app.level = level;
     window.GitCore.setClock(Date.UTC(2026, 0, 5, 1, 0, 0));
@@ -86,62 +94,254 @@
     app.world.cwd = app.world.repoAt(PROJ) ? PROJ : '/home/you';
     if (level.id === 'c1-1' || level.id === 'c0-1' || level.id === 'c0-2' || level.id === 'c5-1') app.world.cwd = '/home/you';
     app.sticky = level.tasks.map(() => false);
-    app.hintsShown = 0; app.lastTrace = []; app.lastArgv = null; app.selectedCommit = null; app.levelState = { wasRejected: false, cmds: 0 };
+    app.revealed = []; app.hintsShown = 0; app.lastTrace = []; app.lastArgv = null; app.selectedCommit = null; app.levelState = { wasRejected: false, cmds: 0 };
+    app.debriefKey = null; app.justDone = false; app.lastCurrent = -1; app.briefStep = 0;
     app.term.clear();
     app.term.append(`=== ${level.title} ===`, 't-info');
     app.term.append(T(`当前目录：${app.world.cwd}   （输入 help 查看命令；点右上角 ↺ 可重置本关）`, `Current directory: ${app.world.cwd}   (type help for commands; ↺ resets the level)`), 't-info');
-    renderLesson();
     const sess = resume ? loadSession() : null;
-    if (sess && sess.level === level.id && sess.log && sess.log.length) replaySession(sess); else saveSession();
+    const same = !!(sess && sess.level === level.id && Array.isArray(sess.log));
+    if (same) restoreHints(sess);
+    // 续玩已开始的关卡时不再自动弹出简报
+    app.started = !!(same && (sess.started || sess.log.length));
+    app.phase = app.started ? 'play' : 'brief';
+    renderLesson();
+    if (same && sess.log.length) replaySession(sess); else saveSession();
     refreshPanels();
     saveProgress();
-    app.term.input.focus();
+    if (!matchMedia('(pointer: coarse)').matches) app.term.input.focus();
+    maybeTour();
   }
   function renderLesson() {
-    const lv = app.level; const ch = CHAPTERS[lv.chapter];
-    $('#chapter-name').textContent = ch.title;
-    $('#level-title').textContent = `${LEVELS.indexOf(lv) + 1}. ${lv.title}`;
-    $('#level-intro').innerHTML = lv.intro;
-    $('#hint-list').innerHTML = '';
-    $('#hint-count').textContent = T(`（${lv.hints.length} 条）`, `(${lv.hints.length} available)`);
-    $('#feedback-box').innerHTML = `<div class="fb mentor"><span class="avatar">🧙</span><span>${lv.sandbox ? T('这里没有任务，随便玩。右边“多人”标签的按钮可以让同事搞事情。', 'No tasks here: play freely. The buttons in the “Team” tab on the right make your teammates stir things up.') : T('我是导师。执行命令后，我会在这里指出问题、解释原因。遇到困难点“💡 提示”，但不看提示通关能拿 3 星。', 'I\'m your mentor. After you run a command, I\'ll point out problems here and explain why. Stuck? Click “💡 Hint”, but finishing without hints earns 3 stars.')}</span></div>`;
-    $('#level-done').classList.add('hidden');
-    $('#btn-prev').disabled = LEVELS.indexOf(lv) === 0;
-    $('#btn-next').disabled = LEVELS.indexOf(lv) === LEVELS.length - 1;
-    renderTasks();
-    const done = Object.keys(app.completed).filter(k => LEVELS.some(l => l.id === k && !l.sandbox)).length;
-    $('#progress-text').textContent = T(`${done} / ${LEVELS.filter(l => !l.sandbox).length} 关`, `${done} / ${LEVELS.filter(l => !l.sandbox).length} levels`);
+    const lv = app.level;
+    renderHeader();
+    $('#feedback-box').innerHTML = `<div class="fb mentor"><span class="avatar">🧙</span><span>${lv.sandbox ? T('这里没有任务，随便玩。右边“多人”标签的按钮可以让同事搞事情。', 'No tasks here: play freely. The buttons in the “Team” tab on the right make your teammates stir things up.') : T('我是导师。执行命令后，我会在这里指出问题、解释原因。输错命令也没关系，这正是学习的一部分。', 'I\'m your mentor. After you run a command, I\'ll point out problems here and explain why. Wrong commands are fine: they\'re part of learning.')}</span></div>`;
+    $('#btn-prev').disabled = !neighbor(-1);
+    $('#btn-next').disabled = !neighbor(1);
+    $('#problem-bar').innerHTML = J.problemBarHtml(lv);
+    renderProgress();
     renderXp();
+    renderQuestLine();
     const act = $('#multi-actions');
     act.innerHTML = '';
     if (lv.actions) lv.actions.forEach((a, idx) => { const b = document.createElement('button'); b.textContent = a.label; b.addEventListener('click', () => { a.run(app.ctx); app.session.push({ action: idx }); saveSession(); refreshPanels(); evaluate(''); }); act.appendChild(b); });
+    renderPhase();
+  }
+  function renderHeader() {
+    const lv = app.level; const st = J.stageOf(lv.id);
+    $('#chapter-name').innerHTML = st ? `${st.icon} ${esc(st.title)} <span class="muted">· ${st.levels.indexOf(lv.id) + 1}/${st.levels.length}</span>` : esc((CHAPTERS[lv.chapter] || {}).title || '');
+    $('#level-title').textContent = `${J.numberOf(lv.id)}. ${lv.title}`;
+  }
+  function renderProgress() {
+    const total = LEVELS.filter(l => !l.sandbox).length;
+    const done = Object.keys(app.completed).filter(k => LEVELS.some(l => l.id === k && !l.sandbox)).length;
+    $('#progress-text').textContent = T(`${done} / ${total} 关`, `${done} / ${total} levels`);
+  }
+
+  /* ---------- 阶段：简报 → 动手 → 总结 ---------- */
+  function renderPhase() {
+    const ph = app.phase;
+    document.body.classList.toggle('is-briefing', ph === 'brief');
+    $('#briefing').classList.toggle('hidden', ph !== 'brief');
+    $('#problem-bar').classList.toggle('hidden', ph === 'brief');
+    $('#play').classList.toggle('hidden', ph !== 'play');
+    $('#debrief').classList.toggle('hidden', ph !== 'debrief');
+    renderTasks(); // 任务清单始终保持最新（总结阶段它只是隐藏）
+    if (ph === 'brief') renderBriefing(); else if (ph === 'debrief') renderDebrief();
+    applyFocus();
+  }
+  function renderBriefing() {
+    const b = J.briefingHtml(app.level, app.briefStep, { started: app.started });
+    app.briefStep = b.step;
+    const box = $('#briefing'); box.innerHTML = b.html;
+    const card = box.querySelector('.b-card'); if (card) { card.classList.add('enter'); }
+    $('#lesson').scrollTop = 0;
+  }
+  function openBriefing() { app.phase = 'brief'; app.briefStep = 0; renderPhase(); }
+  const allDone = () => app.level.tasks.length > 0 && app.sticky.every(Boolean);
+  function startPlay() {
+    const first = !app.started;
+    app.started = true;
+    app.phase = !app.level.sandbox && allDone() ? 'debrief' : 'play';
+    if (first) saveSession();
+    renderPhase();
+    applyFocus({ autoSwitch: true });
+    if (!matchMedia('(pointer: coarse)').matches) app.term.input.focus();
+    maybeTour();
+  }
+  const currentTaskIndex = () => app.sticky.findIndex(x => !x);
+  const hintOneToOne = () => { const lv = app.level; return lv.tasks.length > 0 && lv.hints.length === lv.tasks.length; };
+  function hintAvailable(i) { const lv = app.level; return hintOneToOne() ? !app.revealed.includes(i) : app.revealed.length < lv.hints.length; }
+  function revealedHintsFor(i) { const lv = app.level; if (hintOneToOne()) return app.revealed.includes(i) ? [lv.hints[i]] : []; return app.revealed.slice().sort((a, b) => a - b).map(k => lv.hints[k]); }
+  function revealHint() {
+    const lv = app.level; const i = currentTaskIndex(); if (i < 0) return;
+    let idx;
+    if (hintOneToOne()) { if (app.revealed.includes(i)) return; idx = i; }
+    else { idx = lv.hints.findIndex((h, k) => !app.revealed.includes(k)); if (idx < 0) return; }
+    app.revealed.push(idx); app.hintsShown = app.revealed.length; saveSession(); renderTasks();
+  }
+  const FOCUS_LABEL = {
+    graph: () => T('📈 提交图', '📈 Commit graph'), trees: () => T('🌳 三棵树', '🌳 Three trees'), analogy: () => T('🔁 原理对比', '🔁 Analogy'), multi: () => T('👥 多人 / 远程', '👥 Team / Remote'),
+    terminal: () => T('⌨️ 终端', '⌨️ Terminal'), editor: () => T('✏️ 编辑器（edit 文件）', '✏️ Editor (edit <file>)'),
+  };
+  function focusChip(f) {
+    if (!f || !FOCUS_LABEL[f]) return '';
+    const panel = TAB_FOCUS.includes(f);
+    return `<button class="tc-focus" data-focus="${f}" title="${panel ? T('这一步值得看右侧这个面板', 'This step is worth watching in this panel') : T('这一步在终端里完成', 'This step happens in the terminal')}">${panel ? T('👀 看：', '👀 Watch: ') : T('👉 在：', '👉 In: ')}${esc(FOCUS_LABEL[f]())}</button>`;
   }
   function renderTasks() {
-    const ol = $('#task-list');
-    ol.innerHTML = app.level.tasks.map((t, i) => `<li class="${app.sticky[i] ? 'done' : ''} ${t.observe ? 'observe' : ''}" title="${t.observe ? T('观察类任务：完成后面的任务后会自动打勾', 'Observation task: ticked automatically once you finish the tasks after it') : ''}">${esc(t.text)}</li>`).join('');
+    const lv = app.level; const ol = $('#task-list');
+    if (!lv.tasks.length) { ol.innerHTML = `<li class="task current task-current sandbox-card"><div class="tc-head"><span class="tc-label">🎮 ${T('自由沙盒', 'Free sandbox')}</span></div><div class="tc-text">${T('这里没有任务：试试你学过的任何命令。右侧“多人 / 远程”标签里的按钮可以让同事推送、制造冲突或强推。', 'No tasks here: try any command you have learned. The buttons in the “Team / Remote” tab make your teammates push, cause conflicts or force-push.')}</div></li>`; return; }
+    const ci = currentTaskIndex();
+    const enter = ci !== app.lastCurrent; app.lastCurrent = ci;
+    const doneN = app.sticky.filter(Boolean).length;
+    ol.innerHTML = lv.tasks.map((t, i) => {
+      if (app.sticky[i]) return `<li class="task done ${t.observe ? 'observe' : ''}"><span class="tk">✓</span><span class="tt">${esc(t.text)}</span></li>`;
+      if (i !== ci) return `<li class="task upcoming ${t.observe ? 'observe' : ''}"><span class="tk">${i + 1}</span><span class="tt">${esc(t.text)}</span></li>`;
+      const tc = J.taskCur(lv.id, i); const hints = revealedHintsFor(i).filter(Boolean);
+      const can = hintAvailable(i);
+      const status = app.hintsShown ? T(`本关已用 ${app.hintsShown} 个提示`, `${app.hintsShown} hint${app.hintsShown === 1 ? '' : 's'} used`) : T('不看提示通关 = ★★★', 'No hints = ★★★');
+      return `<li class="task current task-current ${enter ? 'enter' : ''} ${t.observe ? 'observe' : ''}">
+<div class="tc-head"><span class="tc-label">${T('当前任务', 'Current task')} <b>${i + 1}</b> / ${lv.tasks.length}</span><span class="tc-bar"><i style="width:${Math.round(doneN / lv.tasks.length * 100)}%"></i></span></div>
+<div class="tc-text">${t.observe ? '👀 ' : ''}${esc(t.text)}</div>
+${tc && tc.why ? `<div class="tc-why"><b>${T('为什么：', 'Why: ')}</b>${J.txt(tc.why)}</div>` : ''}
+${t.observe ? `<div class="tc-note">${T('观察类任务：照做并看看结果，完成后面的任务后会自动打勾。', 'Observation task: do it and look at the result; it ticks itself once you finish the tasks after it.')}</div>` : ''}
+<div class="tc-foot">${focusChip(tc && tc.focus)}<span class="tc-hint"><button class="hint-btn" ${can ? '' : 'disabled'}>💡 ${T('提示', 'Hint')}</button><span class="muted small">${status}</span></span></div>
+${hints.length ? `<ul class="hint-list">${hints.map(h => `<li title="${T('点击填入终端', 'Click to put it in the terminal')}">${esc(h)}</li>`).join('')}</ul>` : ''}
+</li>`;
+    }).join('');
   }
+  function usedCmd(chip) {
+    const prefix = []; for (const tok of String(chip).trim().split(/\s+/)) { if (/^[<*]/.test(tok) || /\//.test(tok) && tok.startsWith('-')) break; prefix.push(tok); }
+    if (!prefix.length) return false; const p = prefix.join(' ');
+    return (app.world.log || []).some(l => String(l.line || '').split(/&&|;/).some(x => { x = x.trim(); return x === p || x.startsWith(p + ' '); }));
+  }
+  function renderDebrief() {
+    const lv = app.level; const c = app.completed[lv.id]; const st = c ? c.stars : Fx.starsFor(app.hintsShown);
+    const key = lv.id + ':' + st;
+    if (app.debriefKey === key && $('#debrief').innerHTML) return;
+    app.debriefKey = key;
+    $('#debrief').innerHTML = J.debriefHtml(lv, { stars: st, xp: st * 100, nextId: neighbor(1), usedCmd, justDone: app.justDone });
+    $('#lesson').scrollTop = 0;
+  }
+
+  /* ---------- 注意力引导：点亮当前任务需要看的面板 ---------- */
+  const TAB_FOCUS = ['graph', 'trees', 'analogy', 'multi'];
+  function switchTab(name, byUser) {
+    const t = document.querySelector(`.tab[data-tab="${name}"]`); if (!t) return;
+    if (byUser) app.lastTabClick = Date.now();
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active'); $('#tab-' + name).classList.add('active');
+  }
+  function applyFocus({ autoSwitch = false, prevFocus = null } = {}) {
+    document.querySelectorAll('.tab.glow').forEach(t => t.classList.remove('glow'));
+    const line = $('#term-input-line'); line.classList.remove('glow');
+    if (app.phase !== 'play') return;
+    const i = currentTaskIndex(); if (i < 0) return;
+    const tc = J.taskCur(app.level.id, i); const f = tc && tc.focus;
+    if (TAB_FOCUS.includes(f)) {
+      const tab = document.querySelector(`.tab[data-tab="${f}"]`); tab.classList.add('glow');
+      if (autoSwitch && f !== prevFocus && !tab.classList.contains('active') && Date.now() - (app.lastTabClick || 0) > 5000) switchTab(f, false);
+    } else if (f === 'terminal' || f === 'editor') line.classList.add('glow');
+  }
+
   function evaluate(cmd, res) {
     const lv = app.level;
+    const before = currentTaskIndex();
     let newly = [];
     lv.tasks.forEach((t, i) => { if (!app.sticky[i]) { let ok = false; try { ok = !!t.check(app.ctx); } catch (e) { ok = false; } if (ok) { app.sticky[i] = true; newly.push(i); } } });
     if (lv.tasks.every((t, i) => t.observe || app.sticky[i])) lv.tasks.forEach((t, i) => { if (t.observe && !app.sticky[i]) { app.sticky[i] = true; } });
-    renderTasks();
     if (newly.length && !lv.sandbox) { addFeedback(T(`✅ 完成任务 ${newly.map(i => i + 1).join('、')}${newly.length === 1 ? '：' + lv.tasks[newly[0]].text : ''}`, `✅ Task${newly.length === 1 ? '' : 's'} ${newly.map(i => i + 1).join(', ')} done${newly.length === 1 ? ': ' + lv.tasks[newly[0]].text : ''}`), 'good'); if (!app.sticky.every(Boolean)) Fx.Sound.task(); }
     let justDone = false;
-    if (!lv.sandbox && app.sticky.every(Boolean)) {
+    if (!lv.sandbox && allDone()) {
       const stars = Fx.starsFor(app.hintsShown);
       if (!app.completed[lv.id]) { app.completed[lv.id] = { stars, hints: app.hintsShown, cmds: app.levelState.cmds }; justDone = true; gainXp(stars * 100); saveProgress(); Fx.Sound.level(); Fx.confetti(); toast(T(`🎉 本关完成！ ${'★'.repeat(stars)} +${stars * 100} XP`, `🎉 Level complete! ${'★'.repeat(stars)} +${stars * 100} XP`)); }
       else if (stars > (app.completed[lv.id].stars || 0)) { const gain = (stars - app.completed[lv.id].stars) * 100; app.completed[lv.id].stars = stars; gainXp(gain); saveProgress(); toast(T(`⭐ 星级提升到 ${stars} 星！ +${gain} XP`, `⭐ Upgraded to ${stars} stars! +${gain} XP`)); }
-      const d = $('#level-done'); const st = app.completed[lv.id].stars;
-      d.innerHTML = `<b>${T('🎉 本关完成！', '🎉 Level complete!')}</b><div class="stars-big">${'★'.repeat(st)}${'☆'.repeat(3 - st)}</div><div class="muted small">${st === 3 ? T('没有看提示，满星！', 'No hints used: full stars!') : T('不看提示重玩可以拿到 3 星。', 'Replay without hints to earn 3 stars.')} <span class="xp-gain">+${st * 100} XP</span></div>${lv.done || ''}<div style="margin-top:8px"><button id="btn-next-inline" class="primary">${T('下一关 →', 'Next level →')}</button> <button id="btn-replay-inline">${T('重玩本关', 'Replay level')}</button></div>`; d.classList.remove('hidden');
-      const b = $('#btn-next-inline'); if (b) b.addEventListener('click', nextLevel);
-      const rp = $('#btn-replay-inline'); if (rp) rp.addEventListener('click', () => loadLevel(lv.id));
-      $('#progress-text').textContent = T(`${Object.keys(app.completed).length} / ${LEVELS.filter(l => !l.sandbox).length} 关`, `${Object.keys(app.completed).length} / ${LEVELS.filter(l => !l.sandbox).length} levels`);
-    }
+      if (app.phase !== 'debrief') { app.justDone = justDone; app.started = true; app.phase = 'debrief'; renderPhase(); }
+      else { renderTasks(); renderDebrief(); }
+      renderProgress(); renderQuestLine();
+    } else if (app.phase === 'play') {
+      renderTasks();
+      if (newly.length) { const pf = J.taskCur(lv.id, before); applyFocus({ autoSwitch: true, prevFocus: pf && pf.focus }); }
+    } else if (newly.length && app.phase === 'brief') startPlay();
     checkAchievements({ cmd: cmd || '', res: res || {}, levelId: lv.id, done: justDone, state: app.levelState, repoBefore: app.levelState.repoBefore });
   }
-  function nextLevel() { const i = LEVELS.indexOf(app.level); if (i < LEVELS.length - 1) loadLevel(LEVELS[i + 1].id); }
-  function prevLevel() { const i = LEVELS.indexOf(app.level); if (i > 0) loadLevel(LEVELS[i - 1].id); }
+  /* 上一关 / 下一关按旅程顺序（stages[].levels 展平），不在旅程里的关卡回退到 LEVELS 顺序 */
+  function neighbor(d) {
+    const i = ORDER.indexOf(app.level.id);
+    if (i >= 0) return ORDER[i + d] || null;
+    const j = LEVELS.indexOf(app.level) + d; return LEVELS[j] ? LEVELS[j].id : null;
+  }
+  function nextLevel() { const n = neighbor(1); if (n) loadLevel(n); }
+  function prevLevel() { const p = neighbor(-1); if (p) loadLevel(p); }
+
+  /* ---------- 任务线 ---------- */
+  function renderQuestLine() {
+    const el = $('#questline');
+    el.innerHTML = J.questLineHtml({ completed: app.completed, currentId: app.level.id });
+    const cur = el.querySelector('.ql-dot.current');
+    if (cur && el.scrollWidth > el.clientWidth + 2) el.scrollLeft = Math.max(0, cur.offsetLeft - el.clientWidth / 2);
+  }
+  function showTip(target) {
+    const tip = $('#ql-tip'); tip.textContent = target.dataset.tip; tip.classList.remove('hidden');
+    const r = target.getBoundingClientRect(); const w = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8) + 'px'; tip.style.top = (r.bottom + 8) + 'px';
+  }
+  const hideTip = () => $('#ql-tip').classList.add('hidden');
+  function bindQuestLine() {
+    const el = $('#questline');
+    let pressTimer = null, longPressed = false;
+    el.addEventListener('mouseover', e => { const t = e.target.closest('[data-tip]'); if (t) showTip(t); });
+    el.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) hideTip(); });
+    el.addEventListener('focusin', e => { const t = e.target.closest('[data-tip]'); if (t) showTip(t); });
+    el.addEventListener('focusout', hideTip);
+    el.addEventListener('touchstart', e => { const t = e.target.closest('[data-tip]'); longPressed = false; if (!t) return; clearTimeout(pressTimer); pressTimer = setTimeout(() => { longPressed = true; showTip(t); }, 420); }, { passive: true });
+    el.addEventListener('touchmove', () => clearTimeout(pressTimer), { passive: true });
+    el.addEventListener('touchend', e => { clearTimeout(pressTimer); if (longPressed) { e.preventDefault(); setTimeout(hideTip, 1600); } });
+    el.addEventListener('click', e => {
+      if (longPressed) { longPressed = false; return; }
+      const dot = e.target.closest('.ql-dot'); if (dot) { hideTip(); if (dot.dataset.id !== app.level.id) loadLevel(dot.dataset.id); return; }
+      const stg = e.target.closest('.ql-seg'); if (stg && e.target.closest('.ql-stage')) { const ids = [...stg.querySelectorAll('.ql-dot')].map(d => d.dataset.id); const target = ids.find(id => !app.completed[id] && levelById(id) && !levelById(id).sandbox) || ids[0]; hideTip(); if (target && target !== app.level.id) loadLevel(target); }
+    });
+  }
+
+  /* ---------- 旅程总览 ---------- */
+  function journeyTarget() {
+    const rec = J.nextRecommended(app.completed);
+    if (!app.completed[app.level.id]) return app.level.id;
+    return rec || app.level.id;
+  }
+  function openJourney() {
+    const el = $('#journey');
+    const target = journeyTarget(); const tl = levelById(target);
+    const fresh = !Object.keys(app.completed).length && !app.started && target === ORDER[0];
+    const label = fresh ? T('▶ 开始旅程', '▶ Start the journey') : T(`▶ 继续：${J.numberOf(target)}. ${tl.title}`, `▶ Continue: ${J.numberOf(target)}. ${tl.title}`);
+    el.innerHTML = J.overviewHtml({ completed: app.completed, currentId: app.level.id, startLabel: esc(label) });
+    el.classList.remove('hidden'); document.body.classList.add('journey-open');
+    el.scrollTop = 0;
+    if (!fresh) { const cs = el.querySelector('.jv-stage.current'); if (cs) setTimeout(() => cs.scrollIntoView({ block: 'center' }), 0); }
+    const btn = el.querySelector('.jv-start'); if (btn) btn.focus({ preventScroll: true });
+  }
+  function closeJourney() {
+    const el = $('#journey'); if (el.classList.contains('hidden')) return;
+    el.classList.add('hidden'); document.body.classList.remove('journey-open');
+    try { localStorage.setItem('gitgame.journey', 'seen'); } catch (e) { }
+    maybeTour();
+  }
+  function bindJourney() {
+    $('#journey').addEventListener('click', e => {
+      if (e.target.closest('#levels-close')) { closeJourney(); return; }
+      const st = e.target.closest('.jv-start'); if (st) { const t = journeyTarget(); closeJourney(); if (t !== app.level.id) loadLevel(t); return; }
+      const n = e.target.closest('.jv-node'); if (n) { closeJourney(); if (n.dataset.id !== app.level.id) loadLevel(n.dataset.id); }
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#journey').classList.contains('hidden')) closeJourney(); });
+  }
+  /* 新手引导：首次访问时，在旅程总览之后、第一次进入“动手”阶段时运行 */
+  function maybeTour() {
+    if (!app.tourPending || app.phase !== 'play' || !$('#journey').classList.contains('hidden')) return;
+    app.tourPending = false;
+    setTimeout(() => Fx.runTour(() => { try { localStorage.setItem('gitgame.tour', 'done'); } catch (e) { } app.term.input.focus(); }), 300);
+  }
 
   /* ---------- 反馈（通用纠错） ---------- */
   const GENERAL_FEEDBACK = [
@@ -183,6 +383,7 @@
     const world = app.world;
     app.term.echoCommand(world.prompt(), line);
     if (!line.trim()) return;
+    if (app.phase === 'brief') startPlay(); // 简报期间直接敲命令 = 开始动手
     app.levelState.cmds++;
     const curBefore = world.currentRepo();
     app.levelState.repoBefore = curBefore ? { hadConflictMerge: !!(curBefore.repo.state.merge || curBefore.repo.state.rebase || curBefore.repo.state.cherryPick) && curBefore.repo.conflicts.size === 0 && (curBefore.repo.state.merge ? true : true) && curBefore.repo.reflogs && (curBefore.repo._hadConflict || false) } : null;
@@ -297,10 +498,7 @@
   }
   function cancelEditor() { $('#editor-modal').classList.add('hidden'); if (editorState && editorState.kind === 'commit') app.term.append('Aborting commit due to empty commit message.', 't-err'); editorState = null; app.term.input.focus(); }
 
-  /* ---------- 关卡列表 / 速查 ---------- */
-  function renderLevelsModal() {
-    Fx.renderMap($('#levels-list'), LEVELS, CHAPTERS, app.completed, app.level.id, id => { $('#levels-modal').classList.add('hidden'); loadLevel(id); });
-  }
+  /* ---------- 速查 ---------- */
   const CHEAT = T(`
 <h4>三棵树</h4><div><code>git status</code> 状态 · <code>git add 文件</code> 放入暂存区 · <code>git commit -m "说明"</code> 提交 · <code>git diff</code> / <code>git diff --staged</code> 差异 · <code>git log --oneline --graph --all</code> 历史图</div>
 <h4>撤销</h4><div><code>git restore 文件</code> 丢弃工作区修改 · <code>git restore --staged 文件</code> 取消暂存 · <code>git commit --amend</code> 改上次提交 · <code>git reset --soft/--mixed/--hard 提交</code> · <code>git revert 提交</code> 反向提交 · <code>git reflog</code> 找回一切</div>
@@ -323,36 +521,56 @@
   function init() {
     window.I18N.applyStatic(document);
     document.title = T('Git 沙盒学院 · 在浏览器里用真实逻辑学 git', 'Git Sandbox Academy · Learn git with real git logic, in your browser');
+    $('#questline').setAttribute('aria-label', T('任务线', 'Quest line'));
     $('#btn-lang').addEventListener('click', () => { const hadParam = /[?&]lang=/.test(location.search); window.I18N.set(window.I18N.lang === 'en' ? 'zh' : 'en'); if (!hadParam) location.reload(); /* 同 URL 带 #hash 时 location.replace 只是锚点跳转，不会刷新 */ });
     app.term = new Terminal($('#terminal'), { onCommand: runCommand, completions });
-    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active')); t.classList.add('active'); $('#tab-' + t.dataset.tab).classList.add('active'); }));
-    $('#btn-hint').addEventListener('click', () => { const lv = app.level; if (app.hintsShown < lv.hints.length) { app.hintsShown++; $('#hint-list').innerHTML = lv.hints.slice(0, app.hintsShown).map(h => `<li>${esc(h)}</li>`).join(''); $('#hint-count').textContent = T(`（${app.hintsShown}/${lv.hints.length}）`, `(${app.hintsShown}/${lv.hints.length})`); saveSession(); } });
+    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab, true)));
     $('#btn-reset').addEventListener('click', () => loadLevel(app.level.id));
     $('#btn-next').addEventListener('click', nextLevel);
     $('#btn-prev').addEventListener('click', prevLevel);
-    $('#btn-levels').addEventListener('click', () => { renderLevelsModal(); $('#levels-modal').classList.remove('hidden'); });
+    $('#btn-levels').addEventListener('click', openJourney);
     $('#btn-achv').addEventListener('click', () => { renderAchievements(); $('#achv-modal').classList.remove('hidden'); });
     $('#achv-close').addEventListener('click', () => $('#achv-modal').classList.add('hidden'));
     Fx.Sound.init(); $('#btn-sound').textContent = Fx.Sound.enabled ? '🔊' : '🔇';
     $('#btn-sound').addEventListener('click', () => { $('#btn-sound').textContent = Fx.Sound.toggle() ? '🔊' : '🔇'; });
-    // 点击讲解/提示里的命令直接填入终端
+    // 左栏：简报翻页、任务卡按钮、总结按钮；点击讲解/提示里的命令直接填入终端
     const insert = text => { app.term.input.value = text.trim(); app.term.input.focus(); };
-    $('#lesson').addEventListener('click', e => { const code = e.target.closest('code'); if (code && !e.target.closest('pre')) { insert(code.textContent); return; } const li = e.target.closest('#hint-list li'); if (li) { let cmd = li.textContent.split('\n')[0].replace(/\s*（.*$/, '').replace(/\s+或\s+.*$/, ''); if (window.I18N.lang === 'en') cmd = cmd.replace(/\s+\([^"'`]*\)?\s*$/, '').replace(/\s{2,}or\s{2,}.*$/, '').replace(/\s+or\s+(?=(git|edit|echo|sed|cat|cp|rm)\b).*$/, ''); insert(cmd); } });
-    $('#levels-close').addEventListener('click', () => $('#levels-modal').classList.add('hidden'));
+    $('#lesson').addEventListener('click', e => {
+      const t = e.target;
+      const pill = t.closest('.b-pill'); if (pill) { app.briefStep = +pill.dataset.step; renderBriefing(); return; }
+      if (t.closest('.b-prev')) { app.briefStep--; renderBriefing(); return; }
+      if (t.closest('.b-next')) { app.briefStep++; renderBriefing(); return; }
+      if (t.closest('.b-start')) { startPlay(); return; }
+      if (t.closest('.b-skip-link')) { e.preventDefault(); startPlay(); return; }
+      if (t.closest('.pb-rebrief')) { openBriefing(); return; }
+      if (t.closest('.hint-btn')) { revealHint(); return; }
+      const fc = t.closest('.tc-focus'); if (fc) { const f = fc.dataset.focus; if (TAB_FOCUS.includes(f)) { switchTab(f, true); const v = $('#viz'); if (v.getBoundingClientRect().top > innerHeight) v.scrollIntoView({ behavior: 'smooth' }); } else app.term.input.focus(); return; }
+      if (t.closest('#btn-next-inline')) { nextLevel(); return; }
+      if (t.closest('#btn-replay-inline')) { loadLevel(app.level.id); return; }
+      if (t.closest('#btn-journey-inline')) { openJourney(); return; }
+      const code = t.closest('code'); if (code && !t.closest('pre')) { insert(code.textContent); return; }
+      const li = t.closest('.hint-list li'); if (li) { let cmd = li.textContent.split('\n')[0].replace(/\s*（.*$/, '').replace(/\s+或\s+.*$/, ''); if (window.I18N.lang === 'en') cmd = cmd.replace(/\s+\([^"'`]*\)?\s*$/, '').replace(/\s{2,}or\s{2,}.*$/, '').replace(/\s+or\s+(?=(git|edit|echo|sed|cat|cp|rm)\b).*$/, ''); insert(cmd); }
+    });
+    bindQuestLine();
+    bindJourney();
     $('#btn-cheatsheet').addEventListener('click', () => { $('#cheat-body').innerHTML = CHEAT; $('#cheat-modal').classList.remove('hidden'); });
     $('#cheat-close').addEventListener('click', () => $('#cheat-modal').classList.add('hidden'));
     $('#editor-save').addEventListener('click', saveEditor);
     $('#editor-cancel').addEventListener('click', cancelEditor);
     $('#editor-text').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveEditor(); } if (e.key === 'Escape') cancelEditor(); if (e.key === 'Tab') { e.preventDefault(); const t = e.target; const s = t.selectionStart; t.value = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 2; } });
     document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m && m.id !== 'editor-modal') m.classList.add('hidden'); }));
+    window.addEventListener('resize', hideTip);
     const hash = location.hash.replace('#', '');
     const saved = loadProgress();
-    if (hash && !LEVELS.some(l => l.id === hash)) toast(T(`没有叫 "${hash}" 的关卡，已打开上次的关卡`, `There's no level called "${hash}"; opened your last level instead`));
-    loadLevel(LEVELS.some(l => l.id === hash) ? hash : (saved || LEVELS[0].id), { resume: true });
-    let toured = false; try { toured = localStorage.getItem('gitgame.tour') === 'done'; } catch (e) { }
-    if (!toured && !hash) Fx.runTour(() => { try { localStorage.setItem('gitgame.tour', 'done'); } catch (e) { } app.term.input.focus(); });
-    window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (LEVELS.some(l => l.id === h) && app.level.id !== h) loadLevel(h); });
+    let toured = false, seenJourney = false; try { toured = localStorage.getItem('gitgame.tour') === 'done'; seenJourney = localStorage.getItem('gitgame.journey') === 'seen'; } catch (e) { }
+    app.tourPending = !toured && !hash;
+    const firstJourney = !seenJourney && !hash;
+    if (hash && !levelById(hash)) toast(T(`没有叫 "${hash}" 的关卡，已打开上次的关卡`, `There's no level called "${hash}"; opened your last level instead`));
+    if (firstJourney) $('#journey').classList.remove('hidden'); // 先占位，避免 loadLevel 里的引导抢先
+    loadLevel(levelById(hash) ? hash : (levelById(saved) ? saved : ORDER[0]), { resume: true });
+    if (firstJourney) openJourney();
+    window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (levelById(h) && app.level.id !== h) { closeJourney(); loadLevel(h); } });
   }
-  window.GitGame = { app, loadLevel, runCommand, LEVELS };
+  window.GitGame = { app, loadLevel, runCommand, LEVELS, openJourney, closeJourney, startPlay, ORDER };
   document.addEventListener('DOMContentLoaded', init);
 })();

@@ -1,4 +1,4 @@
-/* 游戏化层：星级、经验与称号、成就、音效、彩带、关卡地图、新手引导 */
+/* 游戏化层：星级、经验与称号、成就、音效、彩带、新手引导（旅程总览见 journey.js） */
 (function (global) {
   'use strict';
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -52,35 +52,40 @@
     { id: 'helper', icon: '📖', name: T('会看文档', 'Reads the docs'), desc: T('使用 git help 或速查', 'Used git help or the cheat sheet'), test: ({ cmd }) => /^git help|^help/.test(cmd) },
   ];
 
-  /* ---------- 关卡地图 ---------- */
-  function renderMap(container, LEVELS, CHAPTERS, completed, currentId, onPick) {
-    const nextRec = LEVELS.find(l => !l.sandbox && !completed[l.id]);
-    container.innerHTML = CHAPTERS.map(ch => {
-      const ls = LEVELS.filter(l => l.chapter === ch.id);
-      const done = ls.filter(l => completed[l.id]).length;
-      const pct = ls.length ? Math.round(done / ls.length * 100) : 0;
-      return `<div class="map-chapter"><div class="map-ch-head"><div><b>${esc(ch.title)}</b><span class="desc">${esc(ch.desc)}</span></div><div class="map-ch-progress"><div class="bar"><i style="width:${pct}%"></i></div><span>${done}/${ls.length}</span></div></div><div class="map-path">${ls.map(l => { const c = completed[l.id]; const stars = c ? '★'.repeat(c.stars || 1) + '☆'.repeat(3 - (c.stars || 1)) : ''; return `<div class="map-node ${c ? 'done' : ''} ${l.id === currentId ? 'current' : ''} ${nextRec && l.id === nextRec.id ? 'next' : ''}" data-id="${l.id}" title="${esc(l.title)}"><div class="circle">${l.sandbox ? '🎮' : c ? '✓' : LEVELS.indexOf(l) + 1}</div><div class="name">${esc(l.title)}</div><div class="stars">${stars}</div></div>`; }).join('<div class="map-link"></div>')}</div></div>`;
-    }).join('');
-    container.querySelectorAll('.map-node').forEach(n => n.addEventListener('click', () => onPick(n.dataset.id)));
-  }
-
-  /* ---------- 新手引导 ---------- */
+  /* ---------- 新手引导（旅程总览之后、第一次进入动手阶段时运行） ---------- */
   const TOUR = [
-    { sel: '#lesson', title: T('左边：关卡与任务', 'Left: levels and tasks'), text: T('这里有讲解、任务清单和提示。任务打勾靠的是仓库的真实状态，不是你输入的字符串。点击任何 <code>代码</code> 可以直接填进终端。', 'Here you get the lesson, the task list and hints. Tasks are ticked based on the real state of the repository, not on what you typed. Click any <code>code</code> to put it straight into the terminal.') },
-    { sel: '#terminal', title: T('中间：终端', 'Middle: the terminal'), text: T('和真实 shell 一样：Tab 补全、↑↓ 历史、<code>edit 文件</code> 打开编辑器。git 的输出和报错与真实 git 一致，放心试错——随时可以“重置本关”。', 'Just like a real shell: Tab completion, ↑↓ history, <code>edit &lt;file&gt;</code> opens an editor. git output and errors match real git, so experiment freely: you can always “Reset level”.') },
-    { sel: '#viz', title: T('右边：看见 git 的内部', 'Right: see inside git'), text: T('提交图实时更新；“三棵树”显示工作区 / 暂存区 / HEAD；“原理对比”解释每条命令底层做了什么，并和“复制文件夹”的原始办法对照；“多人”显示同事和服务器。', 'The commit graph updates live; “Three trees” shows the working tree / staging area (index) / HEAD; “Analogy” explains what each command does under the hood and compares it with the old-school “copy the folder” approach; “Team” shows your teammates and the server.') },
+    { sel: '#questline', title: T('任务线：全程一目了然', 'The quest line: the whole journey at a glance'), text: T('每一段是一个阶段，每个圆点是一关：绿色 ✓ 是完成的，闪烁的是你现在所在的关。悬停（手机上长按）看关卡名，点一下直接跳过去。顶栏的“🧭 旅程”可以随时看全程。', 'Each segment is a stage and each dot a level: green ✓ means done, the pulsing one is where you are. Hover (long-press on a phone) to see a level\'s name; click to jump there. “🧭 Journey” in the top bar shows the full road any time.') },
+    { sel: '.task-current', fallback: '#lesson', title: T('当前任务：一次只做一件事', 'Current task: one thing at a time'), text: T('这张卡片写着这一步要做什么、为什么。卡住了点“💡 提示”（不看提示通关得 3 星）。已完成的任务会收起来，后面的任务先变暗。想回顾问题背景，点上面的“重看简报”。', 'This card says what to do now and why. Stuck? Click “💡 Hint” (finish without hints for 3 stars). Finished tasks fold away and later ones stay dimmed. Click “Briefing” above to revisit the problem.') },
+    { sel: '#terminal-wrap', title: T('终端 + 导师', 'Terminal + mentor'), text: T('和真实 shell 一样：Tab 补全、↑↓ 历史、<code>edit 文件</code> 打开编辑器。放心输错：终端下方的导师 🧙 会解释报错的原因和改法，随时可以“↺ 重置本关”。', 'Just like a real shell: Tab completion, ↑↓ history, <code>edit &lt;file&gt;</code> opens an editor. Mistakes are welcome: the mentor 🧙 under the terminal explains each error and how to fix it, and “↺ Reset level” is always there.') },
+    { sel: '#viz', title: T('右边：看见 git 的内部', 'Right: see inside git'), text: T('提交图、三棵树（工作区 / 暂存区 / HEAD）、原理对比、多人与远程。<b>发光的标签</b>就是这一步最值得看的地方。', 'Commit graph, three trees (working tree / staging area / HEAD), analogy, team & remote. <b>The glowing tab</b> is the one worth watching for this step.') },
   ];
   function runTour(onDone) {
     let i = 0;
     const box = document.createElement('div'); box.className = 'tour';
-    const render = () => {
-      const s = TOUR[i]; const target = document.querySelector(s.sel); const r = target.getBoundingClientRect();
-      box.innerHTML = `<div class="tour-mask"></div><div class="tour-spot" style="left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px"></div><div class="tour-card" style="left:${Math.min(Math.max(r.left + r.width / 2 - 190, 12), innerWidth - 392)}px;top:${Math.min(r.top + 120, innerHeight - 220)}px"><div class="tour-step">${i + 1} / ${TOUR.length}</div><h3>${s.title}</h3><p>${s.text}</p><div class="tour-btns"><button class="skip">${T('跳过', 'Skip')}</button><button class="primary next">${i === TOUR.length - 1 ? T('开始游戏 🎮', 'Start playing 🎮') : T('下一步 →', 'Next →')}</button></div></div>`;
-      box.querySelector('.next').onclick = () => { i++; if (i >= TOUR.length) { box.remove(); onDone(); } else render(); };
-      box.querySelector('.skip').onclick = () => { box.remove(); onDone(); };
-    };
+    const visible = el => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const steps = TOUR.filter(s => visible(document.querySelector(s.sel)) || (s.fallback && visible(document.querySelector(s.fallback))));
+    if (!steps.length) { onDone(); return; }
+    const finish = () => { box.remove(); window.removeEventListener('resize', render); onDone(); };
+    function render() {
+      const s = steps[i]; let target = document.querySelector(s.sel); if (!visible(target)) target = document.querySelector(s.fallback);
+      if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
+      const r = target.getBoundingClientRect(); const pad = 4;
+      box.innerHTML = `<div class="tour-mask"></div><div class="tour-spot" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div><div class="tour-card"><div class="tour-step">${i + 1} / ${steps.length}</div><h3>${s.title}</h3><p>${s.text}</p><div class="tour-btns"><button class="skip">${T('跳过', 'Skip')}</button><button class="primary next">${i === steps.length - 1 ? T('开始吧 🎮', 'Let\'s go 🎮') : T('下一步 →', 'Next →')}</button></div></div>`;
+      const card = box.querySelector('.tour-card'); const cw = Math.min(380, innerWidth - 24); card.style.width = cw + 'px';
+      const ch = card.offsetHeight || 200; const gap = 12;
+      let left = Math.min(Math.max(r.left + r.width / 2 - cw / 2, 12), innerWidth - cw - 12); let top;
+      if (r.bottom + gap + ch < innerHeight) top = r.bottom + gap;
+      else if (r.top - gap - ch > 0) top = r.top - gap - ch;
+      else if (r.right + gap + cw < innerWidth) { left = r.right + gap; top = Math.min(Math.max(r.top, 12), innerHeight - ch - 12); }
+      else if (r.left - gap - cw > 0) { left = r.left - gap - cw; top = Math.min(Math.max(r.top, 12), innerHeight - ch - 12); }
+      else top = Math.max(12, innerHeight - ch - 12);
+      card.style.left = left + 'px'; card.style.top = top + 'px';
+      box.querySelector('.next').onclick = () => { i++; if (i >= steps.length) finish(); else render(); };
+      box.querySelector('.skip').onclick = finish;
+    }
     document.body.appendChild(box); render();
+    window.addEventListener('resize', render);
   }
 
-  global.GitGameFx = { Sound, confetti, RANKS, rankFor, starsFor, ACHIEVEMENTS, renderMap, runTour };
+  global.GitGameFx = { Sound, confetti, RANKS, rankFor, starsFor, ACHIEVEMENTS, runTour };
 })(typeof window !== 'undefined' ? window : globalThis);

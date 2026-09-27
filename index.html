@@ -13,7 +13,7 @@
   <div class="topbar-actions">
     <div id="xp-box" class="xp-box" title="经验值与称号" data-en-title="XP and rank"><span id="rank-title"></span><div class="xp-bar"><i id="xp-fill"></i></div><span id="xp-text"></span></div>
     <span id="progress-text" class="progress-text"></span>
-    <button id="btn-levels" title="关卡地图" data-en-title="Level map" data-en="🗺️ Levels">🗺️ 关卡地图</button>
+    <button id="btn-levels" title="旅程总览：全部阶段与关卡" data-en-title="Journey overview: every stage and level" data-en="🧭 Journey">🧭 旅程</button>
     <button id="btn-achv" title="成就" data-en-title="Achievements">🏆 <span id="achv-count">0</span></button>
     <button id="btn-sound" title="音效开关" data-en-title="Sound on/off">🔊</button>
     <button id="btn-reset" title="把本关恢复到初始状态" data-en-title="Restore this level to its initial state" data-en="↺ Reset level">↺ 重置本关</button>
@@ -21,22 +21,19 @@
     <button id="btn-lang" class="lang-btn" title="Switch to English" data-en-title="切换到中文" data-en="中文">EN</button>
   </div>
 </header>
+<nav id="questline" class="questline" aria-label="任务线"></nav>
 <main id="layout">
   <aside id="lesson">
     <div id="lesson-head">
       <div id="chapter-name" class="chapter-name"></div>
       <h2 id="level-title"></h2>
     </div>
-    <div id="level-intro" class="intro"></div>
-    <section class="tasks">
-      <h3 data-en="Tasks">任务</h3>
-      <ol id="task-list"></ol>
-      <div id="level-done" class="level-done hidden"></div>
+    <div id="problem-bar" class="problem-bar hidden"></div>
+    <section id="briefing" class="briefing hidden" aria-live="polite"></section>
+    <section id="play" class="play hidden">
+      <ol id="task-list" class="task-flow"></ol>
     </section>
-    <section class="hints">
-      <div class="hint-bar"><button id="btn-hint" data-en="💡 Hint">💡 提示</button><span id="hint-count" class="muted"></span></div>
-      <ol id="hint-list"></ol>
-    </section>
+    <section id="debrief" class="debrief hidden"></section>
     <div class="lesson-nav"><button id="btn-prev" data-en="← Previous">← 上一关</button><button id="btn-next" data-en="Next →">下一关 →</button></div>
   </aside>
 
@@ -89,12 +86,8 @@
     <div class="modal-foot"><button id="editor-cancel" data-en="Cancel">取消</button><button id="editor-save" class="primary" data-en="Save">保存</button></div>
   </div>
 </div>
-<div id="levels-modal" class="modal hidden">
-  <div class="modal-box levels-box">
-    <div class="modal-head"><span data-en="🗺️ Level map">🗺️ 关卡地图</span><button id="levels-close">✕</button></div>
-    <div id="levels-list"></div>
-  </div>
-</div>
+<div id="journey" class="journey hidden" role="dialog" aria-modal="true"></div>
+<div id="ql-tip" class="ql-tip hidden"></div>
 <div id="achv-modal" class="modal hidden">
   <div class="modal-box achv-box">
     <div class="modal-head"><span data-en="🏆 Achievements">🏆 成就</span><button id="achv-close">✕</button></div>
@@ -116,8 +109,10 @@
 <script src="js/shell.js"></script>
 <script src="js/analogy.js"></script>
 <script src="js/levels.js"></script>
+<script src="js/curriculum.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/game.js"></script>
+<script src="js/journey.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

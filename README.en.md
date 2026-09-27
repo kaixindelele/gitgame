@@ -8,11 +8,39 @@ A **purely static, zero-dependency** web game: open `index.html` and play. It sh
 - 📣 Promo video: [`media/promo.en.mp4`](media/promo.en.mp4) (about 1 minute) · Chinese version: [`media/promo.mp4`](media/promo.mp4)
 - 🌐 Bilingual (English / Chinese): switch with the language button in the top bar (EN / 中文), or add `?lang=en` / `?lang=zh` to the URL (the button remembers your choice).
 
+## A learning journey driven by problems
+
+The game is organised around the **problems you actually run into** as a developer, not around git commands. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
+
+**Every level follows the same rhythm:**
+
+1. 🎯 **A problem**: a concrete situation, e.g. "your teammate pushed first and your push got rejected".
+2. 🪵 **The crude no-git way**: copying folders, sharing `latest.zip` on a cloud drive, asking in the group chat who has the newest version, and what that costs you.
+3. ⚡ **The git way**: the core idea in one sentence, plus the commands for this level.
+4. 🧭 **What you may run into**: errors, conflicts or rejections are announced up front, so they don't scare you.
+5. 🛠️ **Hands-on**: one task at a time is highlighted, and the panel you should look at lights up. Wrong commands are welcome: the mentor explains what went wrong and how to fix it.
+6. 📋 **Debrief**: no-git vs git side by side, the commands you used, common pitfalls, and a teaser for the next problem.
+
+**9 stages, from easy to hard:**
+
+| Stage | The problem you meet |
+| --- | --- |
+| 📁 Prologue | You want to "save" your project: feel the pain of copying folders first |
+| 💾 Save & record | Go back to yesterday's version; know what changed and why |
+| ⏪ Undo | You broke something, saved the wrong thing, or shipped a bug |
+| 🌿 Doing several things at once | An urgent production fix while a feature is half done; experiments without messing up main |
+| ⚔️ Same line, two changes | Two people or two branches changed the same line: merge conflicts |
+| 🌐 Async teamwork across machines | Out-of-date copies, uploads overwriting each other, rejected pushes |
+| 🚑 Accidents | Deleted files or branches, a force-pushed remote, cleaning too much |
+| 🔍 Hunting bugs | Who changed this line? When did it break? Which commit did it? |
+| 🏖️ Finale | Free sandbox with a server and two teammates |
+
+The **journey overview** opens when you first start the game and is available any time from "🧭 Journey" in the top bar. The **quest line** under the top bar shows every level and your progress; click any dot to jump there.
+
 ## Play it like a game
 
 - **Stars and XP**: each level earns 1–3 stars depending on whether you used hints; stars turn into XP, and XP unlocks ranks (git newbie → Commit apprentice → Branch player → … → Git master).
 - **Achievements**: 18 of them, such as "Conflict terminator", "reflog rescue team" and "Bisect detective", plus a cautionary one, "Crash scene" (you force-pushed over a teammate's commits).
-- **Level map**: a road map of 9 chapters and 42 levels that shows your progress, your stars and the recommended next level. You can jump to any level directly.
 - **Mentor and teammates**: the mentor 🧙 below the terminal gives targeted corrections; your teammates Xiaoming 🧑‍💻 and Xiaohong 👩‍💻 really commit and push from their own clones.
 - **Instant feedback**: tasks tick off with an animation and a sound, finishing a level throws confetti, and terminal output is colored like real git. Click any command in a lesson to paste it into the terminal.
 - **Safe to experiment**: reloading the page replays your moves in the current level, so nothing is lost; "Reset level" returns to the starting state in one click; the "🔬 Show internals" switch prints, inline in the terminal, which objects each command created and which pointer it moved.
@@ -72,7 +100,10 @@ js/shell.js       virtual file system + shell + multiple users / remotes
 js/analogy.js     "Analogy" panel text and the snapshots-as-folders view
 js/levels.js      chapters and levels (setup / tasks / hints / feedback)
 js/ui.js          terminal (with output highlighting), SVG commit graph, three-trees table, multi-repo view
-js/game.js        stars / XP / achievements / sounds / confetti / level map / onboarding
+js/game.js        stars / XP / achievements / sounds / confetti / onboarding
+js/journey.js     journey overview, quest line, level briefing / current task / debrief
+js/curriculum.js  teaching narrative: 9 stages; per level the problem, crude way, git way, what to expect, recap
+docs/DESIGN.md    the problem-driven learning design
 js/main.js        level loading, command execution, feedback, progress and level replay (localStorage)
 test/engine.test.js   engine regression tests (node test/engine.test.js)
 test/levels.test.js   checks that every level can be solved by following its hints
