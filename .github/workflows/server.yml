@@ -49,3 +49,14 @@ jobs:
           else
             $SSH "$CMD"
           fi
+      - name: Public reachability check / 外网可访问性检查
+        if: steps.check.outputs.skip != 'true' && github.event.inputs.command == ''
+        run: |
+          HOST="${SERVER_SSH#*@}"
+          echo "::add-mask::$HOST"
+          PORT=$(sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$SERVER_SSH" 'sed -n "s/^PORT=//p" /etc/default/gitgame')
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "http://$HOST:$PORT/" || echo "000")
+          echo "公网访问 HTTP 状态 / public HTTP status (port $PORT): $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::warning::服务器本机正常，但外网访问失败。请在云服务器防火墙/安全组放行 TCP $PORT。Server is up locally but not reachable publicly; open TCP $PORT in the cloud firewall."
+          fi
